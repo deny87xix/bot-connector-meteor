@@ -19,18 +19,16 @@ src/main/java/com/example/addon/
 Что умеет: команды `.bot connect <ник> <ip[:порт]>`, `.bot list`, `.bot chat <ник> <текст>`,
 `.bot remove <ник>`, `.bot clear`. Только offline-mode серверы. Боты не вселяются в мир (это этап 4).
 
-## Как собрать (по шагам)
+## Как собрать
 
-1. Установите **JDK 21** (например, Temurin 21) и скачайте ZIP шаблона:
-   https://github.com/MeteorDevelopment/meteor-addon-template -> зелёная кнопка Code -> Download ZIP. Распакуйте.
-2. Скопируйте папку `src` из этого архива в папку шаблона **с заменой файлов**.
-3. Откройте `gradle/libs.versions.toml` в шаблоне и проверьте, что версии под 1.21.11
-   (minecraft, fabric-loader, meteor = ваш билд 1.21.11-86 / SNAPSHOT, loom). Если там другая версия —
-   пришлите мне содержимое этого файла, подскажу, что поменять.
-4. В папке шаблона выполните:
+1. Установите **JDK 21** (например, Temurin 21).
+2. Скачайте репозиторий (Code → Download ZIP) или `git clone`, откройте папку в терминале.
+3. Выполните:
    - Windows: `gradlew.bat build`
    - Linux/macOS: `./gradlew build`
-5. Готовый файл: `build/libs/*.jar`. Положите его в `mods` вместе с Meteor и Baritone.
+4. Готовый файл: `build/libs/bot-connector-meteor-0.1.0.jar`. Положите его в `mods` вместе с Meteor и Baritone.
+
+Сборка нацелена на Minecraft 1.21.11, Yarn `1.21.11+build.3`, Meteor `1.21.11-SNAPSHOT` (см. `gradle/libs.versions.toml`).
 
 ## Если сборка упала
 

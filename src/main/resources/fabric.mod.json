@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "bot-connector-meteor",
+  "version": "${version}",
+  "name": "Bot Connector",
+  "description": "Headless-боты для Meteor Client (offline-mode серверы).",
+  "authors": [
+    "deny87xix"
+  ],
+  "contact": {
+    "sources": "https://github.com/deny87xix/bot-connector-meteor"
+  },
+  "icon": "assets/template/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "com.example.addon.AddonTemplate"
+    ]
+  },
+  "custom": {
+    "meteor-client:color": "225,25,25",
+    "modmenu": {
+      "parent": {
+        "id": "meteor-client"
+      }
+    }
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": ["${mc_version}"],
+    "meteor-client": "*"
+  }
+}
