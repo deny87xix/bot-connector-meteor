@@ -3,8 +3,10 @@ package com.example.addon.bots;
 import com.example.addon.AddonTemplate;
 import com.example.addon.bots.net.BotConnector;
 import com.example.addon.bots.store.BotProfileStore;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.orbit.EventHandler;
+import meteordevelopment.orbit.EventPriority;
 import net.minecraft.network.ClientConnection;
 
 import java.util.ArrayList;
@@ -82,5 +84,24 @@ public class BotManager {
                 AddonTemplate.LOG.warn("[Bot {}] tick error: {}", b.name, t.toString());
             }
         }
+    }
+
+    private boolean isBot(ClientConnection c) {
+        if (c == null) return false;
+        for (Bot b : bots.values()) if (b.connection == c) return true;
+        return false;
+    }
+
+    /**
+     * Meteor шлёт PacketEvent.Receive для ВСЕХ соединений, и его модули (например, ServerCommand) приводят
+     * слушатель соединения к классу ClientPlayNetworkHandler -> ClassCastException -> «invalid packet».
+     * Поэтому пакеты ботов перехватываем первыми: отдаём их слушателю бота сами и отменяем событие,
+     * чтобы остальные обработчики Meteor их не видели.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST)
+    private void onPacketReceive(PacketEvent.Receive event) {
+        if (!isBot(event.connection)) return;
+        event.cancel();
+        BotConnector.dispatch(event.connection, event.packet);
     }
 }

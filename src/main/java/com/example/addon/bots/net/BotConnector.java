@@ -94,6 +94,18 @@ public final class BotConnector {
         }
     }
 
+    /** Передать входящий пакет слушателю соединения бота (вызывается из BotManager, минуя обработчики Meteor). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static void dispatch(ClientConnection conn, Packet<?> packet) {
+        net.minecraft.network.listener.PacketListener listener = conn.getPacketListener();
+        if (listener == null) return;
+        try {
+            ((Packet) packet).apply(listener);
+        } catch (Throwable t) {
+            AddonTemplate.LOG.warn("[Bots] dispatch error for {}", packet.getClass().getSimpleName(), t);
+        }
+    }
+
     /** Отправить сообщение/команду от имени бота. */
     public static boolean chat(Bot bot, String text) {
         ClientConnection c = bot.connection;
