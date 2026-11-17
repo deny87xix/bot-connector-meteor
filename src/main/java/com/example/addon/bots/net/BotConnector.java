@@ -120,6 +120,28 @@ public final class BotConnector {
 
         Session(Bot bot, ClientConnection conn) { this.bot = bot; this.conn = conn; }
 
+        // Трассировка пакетов: последние N штук печатаются при отключении (для диагностики кика).
+        private final java.util.ArrayDeque<String> trail = new java.util.ArrayDeque<>();
+
+        void note(String dir, Packet<?> p) {
+            synchronized (trail) {
+                trail.addLast(dir + p.getClass().getSimpleName());
+                while (trail.size() > 24) trail.removeFirst();
+            }
+        }
+
+        String trailText(int last) {
+            synchronized (trail) {
+                java.util.List<String> all = new java.util.ArrayList<>(trail);
+                return String.join(", ", all.subList(Math.max(0, all.size() - last), all.size()));
+            }
+        }
+
+        void send(Packet<?> p) {
+            note("->", p);
+            conn.send(p);
+        }
+
         ClientLoginPacketListener loginListener() {
             return proxy(ClientLoginPacketListener.class, NetworkPhase.LOGIN, this::onLogin);
         }
@@ -166,6 +188,7 @@ public final class BotConnector {
                     return null;
                 }
                 if (n == 1 && args[0] instanceof Packet<?> p) {
+                    note("<-", p);
                     try {
                         sink.accept(p);
                     } catch (Throwable t) {
@@ -187,17 +210,17 @@ public final class BotConnector {
                 // [VERSION-SENSITIVE] порядок и состояния
                 // Порядок как у ванильного клиента: inbound -> send(ack в login-кодеке) -> outbound
                 conn.transitionInbound(ConfigurationStates.S2C, configListener());
-                conn.send(EnterConfigurationC2SPacket.INSTANCE);
+                send(EnterConfigurationC2SPacket.INSTANCE);
                 conn.transitionOutbound(ConfigurationStates.C2S);
-                conn.send(new CustomPayloadC2SPacket(new BrandCustomPayload("vanilla")));
+                send(new CustomPayloadC2SPacket(new BrandCustomPayload("vanilla")));
             } else if (p instanceof LoginCompressionS2CPacket c) {
                 conn.setCompressionThreshold(c.getCompressionThreshold(), false);
             } else if (p instanceof LoginQueryRequestS2CPacket q) {
-                conn.send(new LoginQueryResponseC2SPacket(q.queryId(), null));
+                send(new LoginQueryResponseC2SPacket(q.queryId(), null));
             } else if (p instanceof LoginDisconnectS2CPacket d) {
                 fail("login rejected: " + d.reason().getString());
             } else if (p instanceof CookieRequestS2CPacket c) {
-                conn.send(new CookieResponseC2SPacket(c.key(), null));
+                send(new CookieResponseC2SPacket(c.key(), null));
             }
         }
 
@@ -205,15 +228,15 @@ public final class BotConnector {
 
         void onConfig(Packet<?> p) {
             if (p instanceof KeepAliveS2CPacket k) {
-                conn.send(new KeepAliveC2SPacket(k.getId()));
+                send(new KeepAliveC2SPacket(k.getId()));
             } else if (p instanceof CommonPingS2CPacket pg) {
-                conn.send(new CommonPongC2SPacket(pg.getParameter()));
+                send(new CommonPongC2SPacket(pg.getParameter()));
             } else if (p instanceof SelectKnownPacksS2CPacket) {
-                conn.send(new SelectKnownPacksC2SPacket(List.of()));
+                send(new SelectKnownPacksC2SPacket(List.of()));
             } else if (p instanceof ResourcePackSendS2CPacket rp) {
                 acceptPack(rp);
             } else if (p instanceof CookieRequestS2CPacket c) {
-                conn.send(new CookieResponseC2SPacket(c.key(), null));
+                send(new CookieResponseC2SPacket(c.key(), null));
             } else if (p instanceof DynamicRegistriesS2CPacket d) {
                 // [VERSION-SENSITIVE]
                 registries.putDynamicRegistry(d.registry(), d.entries());
@@ -240,7 +263,7 @@ public final class BotConnector {
                 var outbound = bindC2S(RegistryByteBuf.makeFactory(regs));
 
                 conn.transitionInbound(inbound, playListener());
-                conn.send(ReadyC2SPacket.INSTANCE);
+                send(ReadyC2SPacket.INSTANCE);
                 conn.transitionOutbound(outbound);
                 bot.set(Bot.State.CONFIG, "entering world ...");
             } catch (Throwable t) {
@@ -253,17 +276,17 @@ public final class BotConnector {
 
         void onPlay(Packet<?> p) {
             if (p instanceof KeepAliveS2CPacket k) {
-                conn.send(new KeepAliveC2SPacket(k.getId()));
+                send(new KeepAliveC2SPacket(k.getId()));
             } else if (p instanceof CommonPingS2CPacket pg) {
-                conn.send(new CommonPongC2SPacket(pg.getParameter()));
+                send(new CommonPongC2SPacket(pg.getParameter()));
             } else if (p instanceof GameJoinS2CPacket) {
                 bot.set(Bot.State.ONLINE, "joined the game as " + bot.name);
                 echo("§7joined the game");
             } else if (p instanceof PlayerPositionLookS2CPacket pos) {
                 // [VERSION-SENSITIVE]
-                conn.send(new TeleportConfirmC2SPacket(pos.teleportId()));
+                send(new TeleportConfirmC2SPacket(pos.teleportId()));
             } else if (p instanceof HealthUpdateS2CPacket h) {
-                if (h.getHealth() <= 0f) conn.send(new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN));
+                if (h.getHealth() <= 0f) send(new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN));
             } else if (p instanceof ResourcePackSendS2CPacket rp) {
                 acceptPack(rp);
             } else if (p instanceof GameMessageS2CPacket m) {
@@ -277,8 +300,8 @@ public final class BotConnector {
 
         void acceptPack(ResourcePackSendS2CPacket rp) {
             // [VERSION-SENSITIVE]
-            conn.send(new ResourcePackStatusC2SPacket(rp.id(), ResourcePackStatusC2SPacket.Status.ACCEPTED));
-            conn.send(new ResourcePackStatusC2SPacket(rp.id(), ResourcePackStatusC2SPacket.Status.SUCCESSFULLY_LOADED));
+            send(new ResourcePackStatusC2SPacket(rp.id(), ResourcePackStatusC2SPacket.Status.ACCEPTED));
+            send(new ResourcePackStatusC2SPacket(rp.id(), ResourcePackStatusC2SPacket.Status.SUCCESSFULLY_LOADED));
         }
 
         void echo(String msg) {
@@ -293,6 +316,8 @@ public final class BotConnector {
         void fail(String reason) {
             bot.set(Bot.State.ERROR, reason);
             echo("§c" + reason);
+            AddonTemplate.LOG.info("[Bot {}] last packets: {}", bot.name, trailText(24));
+            echo("§7последние пакеты: " + trailText(10));
             try { conn.disconnect(Text.literal(reason)); } catch (Throwable ignored) {}
         }
 
