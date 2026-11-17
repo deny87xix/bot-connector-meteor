@@ -1,5 +1,6 @@
 package com.example.addon.bots;
 
+import com.example.addon.bots.sim.BotSim;
 import net.minecraft.network.ClientConnection;
 
 import java.util.UUID;
@@ -16,6 +17,8 @@ public class Bot {
     public volatile State state = State.CONNECTING;
     public volatile String status = "";
     public volatile ClientConnection connection;
+    /** Физика и чанки тела бота (создаётся при входе в фазу play). */
+    public volatile BotSim sim;
     public final long attemptId;
 
     public Bot(String name, String address, long attemptId) {

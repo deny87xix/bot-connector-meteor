@@ -2,6 +2,7 @@ package com.example.addon.commands;
 
 import com.example.addon.bots.Bot;
 import com.example.addon.bots.BotManager;
+import com.example.addon.bots.BotSwap;
 import com.example.addon.bots.net.BotConnector;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -44,8 +45,14 @@ public class BotCommand extends Command {
 
         builder.then(literal("list").executes(ctx -> {
             List<Bot> bots = BotManager.INSTANCE.all();
+            if (BotSwap.isInside()) {
+                info("вы внутри бота %s (ваш прежний ник: %s). Вернуться: .bot back", BotSwap.insideNick(), BotSwap.originName());
+            }
             if (bots.isEmpty()) { info("ботов нет"); return SINGLE_SUCCESS; }
-            for (Bot b : bots) info("%s @ %s [%s] %s", b.name, b.address, b.state, b.status);
+            for (Bot b : bots) {
+                String pos = (b.state == Bot.State.ONLINE && b.sim != null) ? " " + b.sim.describe() : "";
+                info("%s @ %s [%s] %s%s", b.name, b.address, b.state, b.status, pos);
+            }
             return SINGLE_SUCCESS;
         }));
 
@@ -59,5 +66,21 @@ public class BotCommand extends Command {
                     else if (!BotConnector.chat(b, text)) error("бот ещё не зашёл, отключён, или текст пустой/длиннее 256 символов");
                     return SINGLE_SUCCESS;
                 }))));
+
+        // Войти в бота: ваш клиент перезаходит под его ником, а ваш прежний ник остаётся на сервере ботом.
+        builder.then(literal("enter")
+            .then(argument("nick", StringArgumentType.word()).executes(ctx -> {
+                String nick = StringArgumentType.getString(ctx, "nick");
+                String err = BotSwap.enter(nick);
+                if (err != null) error(err);
+                return SINGLE_SUCCESS;
+            })));
+
+        // Вернуться в свой аккаунт; бот снова становится headless.
+        builder.then(literal("back").executes(ctx -> {
+            String err = BotSwap.back();
+            if (err != null) error(err);
+            return SINGLE_SUCCESS;
+        }));
     }
 }

@@ -54,6 +54,14 @@ public class BotManager {
         return true;
     }
 
+    /** Отключает бота, но оставляет его в списке (и в сохранённых профилях) — для .bot enter. */
+    public boolean suspend(String nick) {
+        Bot b = bots.get(key(nick));
+        if (b == null) return false;
+        close(b);
+        return true;
+    }
+
     public void clear() {
         for (Bot b : new ArrayList<>(bots.values())) close(b);
         bots.clear();
@@ -72,14 +80,21 @@ public class BotManager {
         b.set(Bot.State.DISCONNECTED, "отключён");
     }
 
-    /** Тикаем соединения ботов: flush + обработка закрытия. */
+    /** Тикаем соединения ботов: физика + flush + обработка закрытия. */
     @EventHandler
     private void onTick(TickEvent.Pre event) {
+        BotSwap.tick();
+
         for (Bot b : bots.values()) {
             ClientConnection c = b.connection;
             if (c == null) continue;
             try {
-                if (c.isOpen()) c.tick(); else c.handleDisconnection();
+                if (c.isOpen()) {
+                    BotConnector.tick(b);
+                    c.tick();
+                } else {
+                    c.handleDisconnection();
+                }
             } catch (Throwable t) {
                 AddonTemplate.LOG.warn("[Bot {}] tick error: {}", b.name, t.toString());
             }
