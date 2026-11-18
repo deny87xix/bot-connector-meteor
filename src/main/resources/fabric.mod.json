@@ -3,13 +3,14 @@
   "id": "bot-connector-meteor",
   "version": "${version}",
   "name": "Bot Connector",
-  "description": "Headless-боты для Meteor Client (offline-mode серверы).",
+  "description": "Боты для Meteor Client (offline-mode серверы): физика, вход в бота, Meteor и Baritone от его имени.",
   "authors": [
     "deny87xix"
   ],
   "contact": {
     "sources": "https://github.com/deny87xix/bot-connector-meteor"
   },
+  "license": "MIT",
   "icon": "assets/template/icon.png",
   "environment": "client",
   "entrypoints": {

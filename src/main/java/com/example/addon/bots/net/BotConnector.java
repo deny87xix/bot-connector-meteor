@@ -2,6 +2,7 @@ package com.example.addon.bots.net;
 
 import com.example.addon.AddonTemplate;
 import com.example.addon.bots.Bot;
+import com.example.addon.bots.sim.BotSim;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientRegistries;
 import net.minecraft.network.ClientConnection;
@@ -33,6 +34,7 @@ import net.minecraft.network.state.PlayStateFactories;
 import net.minecraft.registry.DynamicRegistryManager;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
+import net.minecraft.world.chunk.PalettesFactory;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -48,6 +50,8 @@ import java.util.List;
  * Слушатели пакетов сделаны через java.lang.reflect.Proxy и диспетчеризуются по ТИПУ пакета
  * (instanceof), а не по имени метода, чтобы не реализовывать десятки методов интерфейсов
  * и чтобы работало в боевом (intermediary) окружении.
+ *
+ * Тело бота (чанки, гравитация, коллизии, пакеты движения) живёт в {@link BotSim}.
  *
  * ВАЖНО: эта часть сильнее всего зависит от версии Minecraft. Места, где вероятны ошибки
  * компиляции при первой сборке, помечены // [VERSION-SENSITIVE].
@@ -91,6 +95,17 @@ public final class BotConnector {
         } catch (Throwable t) {
             AddonTemplate.LOG.warn("[Bot {}] connect failed", bot.name, t);
             bot.set(Bot.State.ERROR, "connect error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    /** Тик тела бота (физика + пакеты движения). Вызывается из BotManager на главном потоке. */
+    public static void tick(Bot bot) {
+        BotSim sim = bot.sim;
+        if (sim == null || bot.state != Bot.State.ONLINE) return;
+        try {
+            sim.tick();
+        } catch (Throwable t) {
+            AddonTemplate.LOG.warn("[Bot {}] sim tick error", bot.name, t);
         }
     }
 
@@ -274,6 +289,9 @@ public final class BotConnector {
                 var inbound = PlayStateFactories.S2C.bind(RegistryByteBuf.makeFactory(regs));
                 var outbound = bindC2S(RegistryByteBuf.makeFactory(regs));
 
+                // Тело бота: чанки, гравитация, коллизии. Создаём ДО перехода, чтобы не потерять первые пакеты.
+                bot.sim = new BotSim(conn, PalettesFactory.fromRegistryManager(regs));
+
                 conn.transitionInbound(inbound, playListener());
                 send(ReadyC2SPacket.INSTANCE);
                 conn.transitionOutbound(outbound);
@@ -287,16 +305,40 @@ public final class BotConnector {
         // ------------------------------------------------------------ PLAY
 
         void onPlay(Packet<?> p) {
-            if (p instanceof KeepAliveS2CPacket k) {
+            BotSim sim = bot.sim;
+
+            if (p instanceof BundleS2CPacket b) {
+                // Пакеты, приходящие пачкой (bundle), обрабатываем по одному в том же порядке.
+                for (Packet<?> q : b.getPackets()) onPlay(q);
+            } else if (p instanceof KeepAliveS2CPacket k) {
                 send(new KeepAliveC2SPacket(k.getId()));
             } else if (p instanceof CommonPingS2CPacket pg) {
                 send(new CommonPongC2SPacket(pg.getParameter()));
-            } else if (p instanceof GameJoinS2CPacket) {
+            } else if (p instanceof GameJoinS2CPacket j) {
+                if (sim != null) sim.onJoin(j.playerEntityId(), j.commonPlayerSpawnInfo().dimensionType().value());
                 bot.set(Bot.State.ONLINE, "joined the game as " + bot.name);
                 echo("§7joined the game");
+            } else if (p instanceof PlayerRespawnS2CPacket r) {
+                if (sim != null) sim.onRespawn(r.commonPlayerSpawnInfo().dimensionType().value());
             } else if (p instanceof PlayerPositionLookS2CPacket pos) {
-                // [VERSION-SENSITIVE]
-                send(new TeleportConfirmC2SPacket(pos.teleportId()));
+                // [VERSION-SENSITIVE] sim сам шлёт TeleportConfirm + Full-позицию, как ванильный клиент
+                if (sim != null) sim.onPosition(pos);
+                else send(new TeleportConfirmC2SPacket(pos.teleportId()));
+            } else if (p instanceof PlayerRotationS2CPacket rot) {
+                if (sim != null) sim.onRotation(rot);
+            } else if (p instanceof ChunkDataS2CPacket cd) {
+                if (sim != null) sim.onChunk(cd);
+            } else if (p instanceof UnloadChunkS2CPacket u) {
+                if (sim != null) sim.onUnload(u.pos());
+            } else if (p instanceof BlockUpdateS2CPacket bu) {
+                if (sim != null) sim.onBlock(bu.getPos(), bu.getState());
+            } else if (p instanceof ChunkDeltaUpdateS2CPacket cdu) {
+                if (sim != null) sim.onDelta(cdu);
+            } else if (p instanceof ChunkSentS2CPacket) {
+                // Без подтверждения батча сервер перестаёт присылать новые чанки.
+                send(new AcknowledgeChunksC2SPacket(25.0f));
+            } else if (p instanceof EntityVelocityUpdateS2CPacket vel) {
+                if (sim != null) sim.onVelocity(vel);
             } else if (p instanceof HealthUpdateS2CPacket h) {
                 if (h.getHealth() <= 0f) send(new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN));
             } else if (p instanceof ResourcePackSendS2CPacket rp) {
