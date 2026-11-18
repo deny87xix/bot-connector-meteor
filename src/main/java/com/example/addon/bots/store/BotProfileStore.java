@@ -40,6 +40,11 @@ public class BotProfileStore {
         }
     }
 
+    /** Копия сохранённых профилей. */
+    public static synchronized List<Profile> all() {
+        return new ArrayList<>(PROFILES);
+    }
+
     public static synchronized void put(String nick, String address) {
         PROFILES.removeIf(p -> p.nickname.equalsIgnoreCase(nick));
         PROFILES.add(new Profile(nick, address));

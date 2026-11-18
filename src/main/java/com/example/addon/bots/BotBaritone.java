@@ -1,8 +1,14 @@
 package com.example.addon.bots;
 
 import com.example.addon.AddonTemplate;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 
 import java.lang.reflect.Method;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Запуск команд Baritone «от имени» бота, в которого вы вошли.
@@ -49,14 +55,7 @@ public final class BotBaritone {
         if (command == null || command.isBlank()) return "пустая команда Baritone";
         if (!available()) return "Baritone не найден: положите его jar в папку mods рядом с Meteor";
         try {
-            Class<?> api = Class.forName("baritone.api.BaritoneAPI");
-            Object provider = api.getMethod("getProvider").invoke(null);
-
-            Method getPrimary = Class.forName("baritone.api.IBaritoneProvider").getMethod("getPrimaryBaritone");
-            Object baritone = getPrimary.invoke(provider);
-
-            Method getCm = Class.forName("baritone.api.IBaritone").getMethod("getCommandManager");
-            Object cm = getCm.invoke(baritone);
+            Object cm = commandManager();
 
             Method exec = Class.forName("baritone.api.command.manager.ICommandManager").getMethod("execute", String.class);
             Object ok = exec.invoke(cm, command.trim());
@@ -67,5 +66,52 @@ public final class BotBaritone {
             Throwable c = t.getCause() != null ? t.getCause() : t;
             return "ошибка Baritone: " + c.getClass().getSimpleName() + ": " + c.getMessage();
         }
+    }
+
+    private static Object commandManager() throws Exception {
+        Class<?> api = Class.forName("baritone.api.BaritoneAPI");
+        Object provider = api.getMethod("getProvider").invoke(null);
+
+        Method getPrimary = Class.forName("baritone.api.IBaritoneProvider").getMethod("getPrimaryBaritone");
+        Object baritone = getPrimary.invoke(provider);
+
+        Method getCm = Class.forName("baritone.api.IBaritone").getMethod("getCommandManager");
+        return getCm.invoke(baritone);
+    }
+
+    /**
+     * Подсказки Baritone для текста команды (без префикса): для «go» вернёт «goto» и т. п.
+     * Любая ошибка (нет Baritone, нет игрока и т. д.) даёт пустой список.
+     */
+    public static List<String> tabComplete(String command) {
+        if (!available() || command == null) return List.of();
+        try {
+            Object cm = commandManager();
+            Method m = Class.forName("baritone.api.command.manager.ICommandManager").getMethod("tabComplete", String.class);
+            Object r = m.invoke(cm, command);
+            if (r instanceof Stream<?> s) {
+                return s.map(String::valueOf).limit(60).collect(Collectors.toList());
+            }
+        } catch (Throwable ignored) {
+        }
+        return List.of();
+    }
+
+    /**
+     * Подсказки для аргумента chat-команды «.bot &lt;ник&gt; baritone &lt;команда&gt;» (поддерживает ввод с префиксом «#»
+     * и без него). Подсказка заменяет только последнее слово.
+     */
+    public static CompletableFuture<Suggestions> suggest(SuggestionsBuilder builder) {
+        String remaining = builder.getRemaining();
+        String p = prefix();
+        boolean hasPrefix = remaining.startsWith(p);
+        String cmd = hasPrefix ? remaining.substring(p.length()) : remaining;
+
+        int lastSpace = remaining.lastIndexOf(' ');
+        int offset = lastSpace >= 0 ? lastSpace + 1 : (hasPrefix ? p.length() : 0);
+
+        SuggestionsBuilder b = builder.createOffset(builder.getStart() + offset);
+        for (String s : tabComplete(cmd)) b.suggest(s);
+        return b.buildFuture();
     }
 }
