@@ -5,7 +5,7 @@
   "name": "Bot Connector",
   "description": "Боты для Meteor Client (offline-mode серверы): физика, вход в бота, Meteor и Baritone от его имени.",
   "authors": [
-    "Bot Connector contributors"
+    "deny87xix"
   ],
   "contact": {
     "sources": "https://github.com/deny87xix/bot-connector-meteor"
