@@ -17,11 +17,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
-/** Реестр ботов, жизненный цикл, тик соединений. */
+/** Реестр ботов, жизненный цикл, тик соединений, чат ботов, автоперезаход (loop). */
 public class BotManager {
     public static final BotManager INSTANCE = new BotManager();
     private static final Pattern NICK = Pattern.compile("[A-Za-z0-9_]{1,16}");
     private static final AtomicLong SEQ = new AtomicLong();
+
+    /** Минимальная пауза между отключением и следующей попыткой loop (не даёт рождать потоки на мгновенных отказах). */
+    private static final long LOOP_DELAY_MS = 500;
 
     private final Map<String, Bot> bots = new ConcurrentHashMap<>();
 
@@ -55,6 +58,32 @@ public class BotManager {
         return true;
     }
 
+    // ------------------------------------------------------------------ loop (автоперезаход)
+
+    /**
+     * Включает/выключает loop у бота. При включении бот также запускается, если он остановлен
+     * (loop = «держать бота онлайн»). Возвращает false, если бота нет.
+     */
+    public boolean setLoop(String nick, boolean on) {
+        Bot b = bots.get(key(nick));
+        if (b == null) return false;
+        b.loop = on;
+        BotProfileStore.setLoop(b.name, on);
+        if (on) b.userStopped = false;
+        b.log.add(on ? "loop включён: после кика/ошибки бот будет заходить снова" : "loop выключен");
+        return true;
+    }
+
+    /** loop для всех ботов (кроме того, в которого вы вошли). Возвращает количество ботов. */
+    public int setLoopAll(boolean on) {
+        int n = 0;
+        for (Bot b : all()) {
+            if (BotSwap.isInside(b.name)) continue;
+            if (setLoop(b.name, on)) n++;
+        }
+        return n;
+    }
+
     // ------------------------------------------------------------------ профили
 
     /** Подгружает сохранённых ботов (bots.json) в реестр как остановленных. Вызывается один раз при старте. */
@@ -64,6 +93,9 @@ public class BotManager {
             if (!validNick(p.nickname) || bots.containsKey(key(p.nickname))) continue;
             Bot b = new Bot(p.nickname, p.address, SEQ.incrementAndGet());
             b.muteChat = p.muteChat;
+            b.loop = p.loop;
+            // Сохранённые боты не запускаются сами при старте игры: loop начнёт работать после Start / .bot loop <ник> true
+            b.userStopped = true;
             b.set(Bot.State.DISCONNECTED, "сохранён (загружен из профиля)");
             bots.put(key(p.nickname), b);
         }
@@ -79,6 +111,8 @@ public class BotManager {
 
         Bot bot = new Bot(nick, address.trim(), SEQ.incrementAndGet(), existing != null ? existing.log : new BotLog());
         bot.muteChat = existing != null && existing.muteChat;
+        bot.loop = existing != null && existing.loop;
+        bot.userStopped = true;
         bot.set(Bot.State.DISCONNECTED, "сохранён");
         bots.put(key(nick), bot);
         BotProfileStore.put(nick, bot.address);
@@ -95,6 +129,7 @@ public class BotManager {
 
         Bot bot = new Bot(nick, address.trim(), SEQ.incrementAndGet(), existing != null ? existing.log : new BotLog());
         bot.muteChat = existing != null && existing.muteChat;
+        bot.loop = existing != null && existing.loop;
         bots.put(key(nick), bot);
         BotProfileStore.put(nick, bot.address);
         bot.log.add("запуск: " + bot.address);
@@ -112,7 +147,7 @@ public class BotManager {
         return connect(b.name, b.address);
     }
 
-    /** Останавливает бота, профиль остаётся. */
+    /** Останавливает бота, профиль остаётся (loop не переподключает до следующего запуска). */
     public boolean stop(String nick) {
         return suspend(nick);
     }
@@ -165,7 +200,9 @@ public class BotManager {
 
     public List<Bot> all() { return new ArrayList<>(bots.values()); }
 
+    /** Ручное отключение: loop такого бота не переподключает. */
     private void close(Bot b) {
+        b.userStopped = true;
         ClientConnection c = b.connection;
         if (c != null && c.isOpen()) {
             try { c.disconnect(net.minecraft.text.Text.literal("bot removed")); } catch (Throwable ignored) {}
@@ -173,7 +210,7 @@ public class BotManager {
         b.set(Bot.State.DISCONNECTED, "отключён");
     }
 
-    /** Тикаем соединения ботов: физика + flush + обработка закрытия. */
+    /** Тикаем соединения ботов: физика + flush + обработка закрытия, затем автоперезаход (loop). */
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         BotSwap.tick();
@@ -192,6 +229,35 @@ public class BotManager {
             } catch (Throwable t) {
                 AddonTemplate.LOG.warn("[Bot {}] tick error: {}", b.name, t.toString());
             }
+        }
+
+        loopTick();
+    }
+
+    /**
+     * loop: если бота кикнули или произошла ошибка (и он не остановлен вручную), перезаходим через полсекунды
+     * и так далее, пока loop не выключат. Попытки идут по одной за раз (новая — только когда предыдущая завершилась).
+     */
+    private void loopTick() {
+        long now = System.currentTimeMillis();
+        for (Bot b : new ArrayList<>(bots.values())) {
+            if (!b.loop || b.userStopped) continue;
+            if (b.state != Bot.State.DISCONNECTED && b.state != Bot.State.ERROR) continue;
+            if (BotSwap.isInside(b.name)) continue;
+
+            // Сервер требует шифрование (online-mode): бесполезно повторять, выключаем loop.
+            if (b.state == Bot.State.ERROR && b.status.contains("offline-mode")) {
+                b.loop = false;
+                BotProfileStore.setLoop(b.name, false);
+                b.log.add("loop выключен: сервер в online-mode, боты работают только на offline-mode");
+                continue;
+            }
+
+            if (now - b.endedAt < LOOP_DELAY_MS) continue;
+
+            b.log.add("loop: перезаход");
+            String err = connect(b.name, b.address);
+            if (err != null) b.log.add("loop: " + err);
         }
     }
 

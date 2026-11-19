@@ -69,6 +69,23 @@ public class BotCommand extends Command {
         return SINGLE_SUCCESS;
     }
 
+    /** .bot loop <ник> true|false: автоперезаход бота после кика/ошибки. */
+    private int setLoop(String nick, boolean on) {
+        if (BotManager.INSTANCE.setLoop(nick, on)) {
+            info(on ? "loop бота %s включён: после кика или ошибки заходит снова" : "loop бота %s выключен", nick);
+        } else {
+            error("бот не найден: %s", nick);
+        }
+        return SINGLE_SUCCESS;
+    }
+
+    /** .bot loop true|false: loop для всех ботов. */
+    private int setLoopAll(boolean on) {
+        int n = BotManager.INSTANCE.setLoopAll(on);
+        info(on ? "loop включён у ботов: %s" : "loop выключен у ботов: %s", n);
+        return SINGLE_SUCCESS;
+    }
+
     @Override
     public void build(LiteralArgumentBuilder<CommandSource> builder) {
         // .bot gui — открыть вкладку Bots
@@ -140,6 +157,16 @@ public class BotCommand extends Command {
             .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::namesAndAll).executes(ctx ->
                 setMute(StringArgumentType.getString(ctx, "nick"), false))));
 
+        // .bot loop true|false — автоперезаход для всех ботов
+        // .bot loop <ник> true|false — автоперезаход одного бота: после кика/ошибки сразу заходит снова, пока не false.
+        // true/false — литералы: Brigadier выбирает их раньше аргумента <ник>, так что «.bot loop true» не спутается с ником.
+        builder.then(literal("loop")
+            .then(literal("true").executes(ctx -> setLoopAll(true)))
+            .then(literal("false").executes(ctx -> setLoopAll(false)))
+            .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
+                .then(literal("true").executes(ctx -> setLoop(StringArgumentType.getString(ctx, "nick"), true)))
+                .then(literal("false").executes(ctx -> setLoop(StringArgumentType.getString(ctx, "nick"), false)))));
+
         // .bot log <ник> [строк] — последние строки лога бота
         builder.then(literal("log")
             .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
@@ -154,13 +181,13 @@ public class BotCommand extends Command {
             }
             if (bots.isEmpty()) { info("ботов нет"); return SINGLE_SUCCESS; }
             for (Bot b : bots) {
-                String mute = BotManager.INSTANCE.isMuted(b) ? " [чат выкл]" : "";
+                String flags = (BotManager.INSTANCE.isMuted(b) ? " [чат выкл]" : "") + (b.loop ? " [loop]" : "");
                 if (BotSwap.isInside(b.name)) {
-                    info("%s @ %s [вы внутри]%s", b.name, b.address, mute);
+                    info("%s @ %s [вы внутри]%s", b.name, b.address, flags);
                     continue;
                 }
                 String pos = (b.state == Bot.State.ONLINE && b.sim != null) ? " " + b.sim.describe() : "";
-                info("%s @ %s [%s] %s%s%s", b.name, b.address, b.state, b.status, pos, mute);
+                info("%s @ %s [%s] %s%s%s", b.name, b.address, b.state, b.status, pos, flags);
             }
             return SINGLE_SUCCESS;
         }));
@@ -201,7 +228,7 @@ public class BotCommand extends Command {
         // .bot <ник> meteor — войти в бота и открыть Meteor от его имени (киллаура и любые модули работают за него).
         // .bot <ник> baritone <команда> — Baritone за бота (с подсказками по Tab). Если вы ещё не в боте, команда сама
         // входит в него и выполняется после загрузки мира.
-        // Служебные слова (connect, remove, ...) выше имеют приоритет, поэтому ники с такими именами здесь недоступны.
+        // Служебные слова (connect, remove, loop, ...) выше имеют приоритет, поэтому ники с такими именами здесь недоступны.
         builder.then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
             .then(literal("meteor").executes(ctx -> {
                 String nick = StringArgumentType.getString(ctx, "nick");

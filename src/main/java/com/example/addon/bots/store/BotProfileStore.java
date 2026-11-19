@@ -20,6 +20,8 @@ public class BotProfileStore {
         public String address;
         /** Чат бота отключён (сообщения сервера не показываются вам). Старые файлы без поля читаются как false. */
         public boolean muteChat;
+        /** Автоперезаход после кика/ошибки. Старые файлы без поля читаются как false. */
+        public boolean loop;
         public Profile(String n, String a) { nickname = n; address = a; }
     }
 
@@ -47,15 +49,20 @@ public class BotProfileStore {
         return new ArrayList<>(PROFILES);
     }
 
-    /** Сохраняет бота; ранее выставленная настройка muteChat сохраняется. */
+    /** Сохраняет бота; ранее выставленные настройки muteChat и loop сохраняются. */
     public static synchronized void put(String nick, String address) {
         boolean mute = false;
+        boolean loop = false;
         for (Profile p : PROFILES) {
-            if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) mute = p.muteChat;
+            if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) {
+                mute = p.muteChat;
+                loop = p.loop;
+            }
         }
         PROFILES.removeIf(p -> p.nickname.equalsIgnoreCase(nick));
         Profile np = new Profile(nick, address);
         np.muteChat = mute;
+        np.loop = loop;
         PROFILES.add(np);
         save();
     }
@@ -63,6 +70,13 @@ public class BotProfileStore {
     public static synchronized void setMute(String nick, boolean mute) {
         for (Profile p : PROFILES) {
             if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) p.muteChat = mute;
+        }
+        save();
+    }
+
+    public static synchronized void setLoop(String nick, boolean loop) {
+        for (Profile p : PROFILES) {
+            if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) p.loop = loop;
         }
         save();
     }

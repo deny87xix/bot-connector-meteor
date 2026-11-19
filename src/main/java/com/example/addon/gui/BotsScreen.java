@@ -30,7 +30,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER;
 
 /**
- * "Bots" screen: saved bots, start/stop, enter, per-bot chat on/off, Meteor/Baritone as a bot, logs.
+ * "Bots" screen: saved bots, start/stop, enter, per-bot chat and loop switches, Meteor/Baritone as a bot, logs.
  * The UI is in English; a Russian help block with all features is at the bottom of the window.
  *
  * The table and the logs are rebuilt only when their data changes (by signature), input fields are never touched,
@@ -45,17 +45,19 @@ public class BotsScreen extends WindowTabScreen {
         "Таблица ботов:",
         "  Select - выбрать бота (для Baritone, Meteor и логов); Start / Stop - запустить или остановить (профиль остаётся).",
         "  Chat: on/off - показывать или скрывать вам чат этого бота (в логе бота сообщения остаются).",
+        "  Loop: on/off - автоперезаход: после кика или ошибки бот снова заходит через ~0.5 с и так до выключения.",
+        "    Stop останавливает бота и перезаход; следующий Start снова включает loop (если он on). На online-mode loop сам гаснет.",
         "  Enter / Back - войти в бота или вернуться в свой аккаунт; Delete - удалить бота и его профиль.",
-        "  Вверху: Start all / Stop all - все боты сразу; кнопка «All bots chat» - общий выключатель чата (при перезапуске игры сбрасывается).",
+        "  Вверху: Start all / Stop all - все боты сразу; Loop all ON / OFF - loop у всех ботов; «All bots chat» - общий выключатель чата.",
         "Добавление: ник + адрес. Save - сохранить без запуска; Save and start - сохранить и сразу подключить.",
-        "  Боты хранятся в config/bots-addon/bots.json и загружаются при старте игры (в списке как остановленные).",
+        "  Боты хранятся в config/bots-addon/bots.json (вместе с Chat и Loop) и загружаются при старте игры как остановленные.",
         "Baritone: Tab - подсказки (go -> goto), Enter или Send - отправить, Stop - команда stop.",
         "  Если вы не внутри бота, команда сама войдёт в него (с перезаходом) и выполнится после загрузки мира.",
         "Meteor: Open Meteor as bot - войти в бота и открыть Meteor от его имени (модули бота запоминаются отдельно).",
         "  Return to my account - вернуться в свой аккаунт (то же, что .bot back).",
-        "Logs: последние 30 строк выбранного бота (состояния, чат сервера, команды Baritone); Clear - очистить.",
+        "Logs: последние 30 строк выбранного бота (состояния, чат сервера, команды Baritone, попытки loop); Clear - очистить.",
         "Команды в чате: .bot gui, connect, save, start, stop, remove, clear, list, log <ник> [N], mute/unmute <ник|all>,",
-        "  chat <ник> <текст>, enter <ник>, back, <ник> meteor, <ник> baritone <команда> (с подсказками по Tab).",
+        "  loop true|false (все), loop <ник> true|false, chat <ник> <текст>, enter <ник>, back, <ник> meteor, <ник> baritone <команда>.",
         "Ограничения: только offline-mode серверы; вход в бота пока идёт с перезаходом клиента.",
         "  Сообщения об ошибках в строке статуса пока могут быть на русском."
     };
@@ -90,10 +92,14 @@ public class BotsScreen extends WindowTabScreen {
         startAll.action = () -> status("started bots: " + BotManager.INSTANCE.startAll());
         WButton stopAll = top.add(theme.button("Stop all")).widget();
         stopAll.action = () -> status("stopped bots: " + BotManager.INSTANCE.stopAll());
+        WButton loopOn = top.add(theme.button("Loop all ON")).widget();
+        loopOn.action = () -> status("loop on for bots: " + BotManager.INSTANCE.setLoopAll(true));
+        WButton loopOff = top.add(theme.button("Loop all OFF")).widget();
+        loopOff.action = () -> status("loop off for bots: " + BotManager.INSTANCE.setLoopAll(false));
 
         statusLabel = add(theme.label("Ready")).expandX().widget();
 
-        tableBox = add(theme.verticalList()).expandX().minWidth(760).widget();
+        tableBox = add(theme.verticalList()).expandX().minWidth(860).widget();
 
         add(theme.horizontalSeparator()).expandX();
 
@@ -195,6 +201,7 @@ public class BotsScreen extends WindowTabScreen {
             h = h * 31 + b.state.ordinal();
             h = h * 31 + (BotSwap.isInside(b.name) ? 1 : 0);
             h = h * 31 + (b.muteChat ? 1 : 0);
+            h = h * 31 + (b.loop ? 1 : 0);
             h = h * 31 + b.status.hashCode();
         }
         h = h * 31 + (BotManager.INSTANCE.isMuteAll() ? 1 : 0);
@@ -283,6 +290,14 @@ public class BotsScreen extends WindowTabScreen {
                 boolean mute = !b.muteChat;
                 BotManager.INSTANCE.setMute(b.name, mute);
                 status(mute ? "chat of bot " + b.name + " is off" : "chat of bot " + b.name + " is on");
+            };
+
+            // Loop: on = after a kick or an error the bot joins again until loop is turned off
+            WButton loop = table.add(theme.button(b.loop ? "Loop: on" : "Loop: off")).widget();
+            loop.action = () -> {
+                boolean on = !b.loop;
+                BotManager.INSTANCE.setLoop(b.name, on);
+                status(on ? "loop of bot " + b.name + " is on" : "loop of bot " + b.name + " is off");
             };
 
             if (inside) {

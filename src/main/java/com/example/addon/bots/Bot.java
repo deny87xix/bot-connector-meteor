@@ -23,6 +23,12 @@ public class Bot {
     public volatile BotSim sim;
     /** Если true, сообщения сервера, которые видит бот, не выводятся вам в чат (в лог бота попадают всегда). */
     public volatile boolean muteChat;
+    /** Автоперезаход: после кика/ошибки бот сразу заходит снова, пока loop не выключен. */
+    public volatile boolean loop;
+    /** Бота остановил пользователь (Stop, вход в бота и т. п.): loop его не переподключает, пока его не запустят снова. */
+    public volatile boolean userStopped;
+    /** Когда бот последний раз перешёл в DISCONNECTED/ERROR (мс). */
+    public volatile long endedAt;
     public final long attemptId;
 
     public Bot(String name, String address, long attemptId) {
@@ -44,6 +50,7 @@ public class Bot {
     public void set(State s, String text) {
         this.state = s;
         this.status = text == null ? "" : text;
+        if (s == State.DISCONNECTED || s == State.ERROR) endedAt = System.currentTimeMillis();
         log.add(s + (status.isEmpty() ? "" : ": " + status));
     }
 }
