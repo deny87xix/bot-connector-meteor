@@ -32,6 +32,16 @@ public class BotCommand extends Command {
         return b.buildFuture();
     }
 
+    /** Подсказка ников ботов и слова all (для mute/unmute). */
+    private static CompletableFuture<Suggestions> namesAndAll(CommandContext<CommandSource> ctx, SuggestionsBuilder b) {
+        String rest = b.getRemaining().toLowerCase();
+        if ("all".startsWith(rest)) b.suggest("all");
+        for (Bot bot : BotManager.INSTANCE.all()) {
+            if (bot.name.toLowerCase().startsWith(rest)) b.suggest(bot.name);
+        }
+        return b.buildFuture();
+    }
+
     private int printLog(String nick, int n) {
         Bot b = BotManager.INSTANCE.get(nick);
         if (b == null) {
@@ -41,6 +51,21 @@ public class BotCommand extends Command {
         List<String> lines = b.log.last(n);
         if (lines.isEmpty()) info("лог пуст");
         for (String l : lines) info("%s", l);
+        return SINGLE_SUCCESS;
+    }
+
+    /** .bot mute|unmute <ник|all>: скрыть/показать вам чат бота. */
+    private int setMute(String nick, boolean mute) {
+        if (nick.equalsIgnoreCase("all")) {
+            BotManager.INSTANCE.setMuteAll(mute);
+            info(mute ? "чат всех ботов отключён (в лог бота сообщения пишутся)" : "чат всех ботов включён");
+            return SINGLE_SUCCESS;
+        }
+        if (BotManager.INSTANCE.setMute(nick, mute)) {
+            info(mute ? "чат бота %s отключён (в лог бота сообщения пишутся)" : "чат бота %s включён", nick);
+        } else {
+            error("бот не найден: %s", nick);
+        }
         return SINGLE_SUCCESS;
     }
 
@@ -106,6 +131,15 @@ public class BotCommand extends Command {
             return SINGLE_SUCCESS;
         }));
 
+        // .bot mute <ник|all> / .bot unmute <ник|all> — не показывать вам чат бота (сообщения остаются в его логе)
+        builder.then(literal("mute")
+            .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::namesAndAll).executes(ctx ->
+                setMute(StringArgumentType.getString(ctx, "nick"), true))));
+
+        builder.then(literal("unmute")
+            .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::namesAndAll).executes(ctx ->
+                setMute(StringArgumentType.getString(ctx, "nick"), false))));
+
         // .bot log <ник> [строк] — последние строки лога бота
         builder.then(literal("log")
             .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
@@ -120,12 +154,13 @@ public class BotCommand extends Command {
             }
             if (bots.isEmpty()) { info("ботов нет"); return SINGLE_SUCCESS; }
             for (Bot b : bots) {
+                String mute = BotManager.INSTANCE.isMuted(b) ? " [чат выкл]" : "";
                 if (BotSwap.isInside(b.name)) {
-                    info("%s @ %s [вы внутри]", b.name, b.address);
+                    info("%s @ %s [вы внутри]%s", b.name, b.address, mute);
                     continue;
                 }
                 String pos = (b.state == Bot.State.ONLINE && b.sim != null) ? " " + b.sim.describe() : "";
-                info("%s @ %s [%s] %s%s", b.name, b.address, b.state, b.status, pos);
+                info("%s @ %s [%s] %s%s%s", b.name, b.address, b.state, b.status, pos, mute);
             }
             return SINGLE_SUCCESS;
         }));

@@ -30,7 +30,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_ENTER;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_KP_ENTER;
 
 /**
- * Экран «Bots»: сохранённые боты, запуск/остановка, вход, Meteor/Baritone от имени бота, логи.
+ * Экран «Bots»: сохранённые боты, запуск/остановка, вход, чат бота вкл/выкл, Meteor/Baritone от имени бота, логи.
  *
  * Таблица и логи перестраиваются только когда меняются данные (по сигнатуре), поля ввода не трогаются,
  * поэтому фокус и введённый текст не пропадают. Координаты обновляются на месте.
@@ -72,7 +72,7 @@ public class BotsScreen extends WindowTabScreen {
 
         statusLabel = add(theme.label("Готово")).expandX().widget();
 
-        tableBox = add(theme.verticalList()).expandX().minWidth(700).widget();
+        tableBox = add(theme.verticalList()).expandX().minWidth(760).widget();
 
         add(theme.horizontalSeparator()).expandX();
 
@@ -168,8 +168,10 @@ public class BotsScreen extends WindowTabScreen {
             h = h * 31 + b.address.hashCode();
             h = h * 31 + b.state.ordinal();
             h = h * 31 + (BotSwap.isInside(b.name) ? 1 : 0);
+            h = h * 31 + (b.muteChat ? 1 : 0);
             h = h * 31 + b.status.hashCode();
         }
+        h = h * 31 + (BotManager.INSTANCE.isMuteAll() ? 1 : 0);
         h = h * 31 + (selected == null ? 0 : selected.toLowerCase().hashCode());
         h = h * 31 + (BotSwap.insideNick() == null ? 0 : BotSwap.insideNick().hashCode());
         return h;
@@ -204,6 +206,17 @@ public class BotsScreen extends WindowTabScreen {
             tableBox.add(theme.label("Вы внутри бота " + BotSwap.insideNick() + " (ваш ник: " + BotSwap.originName() + ")"));
         }
 
+        // Общий выключатель чата всех ботов
+        boolean allMuted = BotManager.INSTANCE.isMuteAll();
+        WButton muteAll = tableBox.add(theme.button(allMuted
+            ? "Чат всех ботов: ВЫКЛ (нажмите, чтобы включить)"
+            : "Чат всех ботов: ВКЛ (нажмите, чтобы выключить)")).widget();
+        muteAll.action = () -> {
+            boolean now = !BotManager.INSTANCE.isMuteAll();
+            BotManager.INSTANCE.setMuteAll(now);
+            status(now ? "чат всех ботов отключён" : "чат всех ботов включён");
+        };
+
         List<Bot> bots = sorted();
         if (bots.isEmpty()) {
             tableBox.add(theme.label("Ботов нет: добавьте ниже"));
@@ -237,6 +250,14 @@ public class BotsScreen extends WindowTabScreen {
                     status(err == null ? "бот " + b.name + " запускается" : err);
                 };
             }
+
+            // Чат бота: ВКЛ = сообщения приходят вам, ВЫКЛ = только в лог бота
+            WButton chat = table.add(theme.button(b.muteChat ? "Чат: выкл" : "Чат: вкл")).widget();
+            chat.action = () -> {
+                boolean mute = !b.muteChat;
+                BotManager.INSTANCE.setMute(b.name, mute);
+                status(mute ? "чат бота " + b.name + " отключён" : "чат бота " + b.name + " включён");
+            };
 
             if (inside) {
                 WButton back = table.add(theme.button("Назад")).widget();

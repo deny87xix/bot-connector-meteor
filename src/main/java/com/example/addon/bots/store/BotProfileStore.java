@@ -13,11 +13,13 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Сохраняет список ботов (ник + адрес) в config/bots-addon/bots.json. */
+/** Сохраняет список ботов (ник + адрес + настройки) в config/bots-addon/bots.json. */
 public class BotProfileStore {
     public static class Profile {
         public String nickname;
         public String address;
+        /** Чат бота отключён (сообщения сервера не показываются вам). Старые файлы без поля читаются как false. */
+        public boolean muteChat;
         public Profile(String n, String a) { nickname = n; address = a; }
     }
 
@@ -45,9 +47,23 @@ public class BotProfileStore {
         return new ArrayList<>(PROFILES);
     }
 
+    /** Сохраняет бота; ранее выставленная настройка muteChat сохраняется. */
     public static synchronized void put(String nick, String address) {
+        boolean mute = false;
+        for (Profile p : PROFILES) {
+            if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) mute = p.muteChat;
+        }
         PROFILES.removeIf(p -> p.nickname.equalsIgnoreCase(nick));
-        PROFILES.add(new Profile(nick, address));
+        Profile np = new Profile(nick, address);
+        np.muteChat = mute;
+        PROFILES.add(np);
+        save();
+    }
+
+    public static synchronized void setMute(String nick, boolean mute) {
+        for (Profile p : PROFILES) {
+            if (p.nickname != null && p.nickname.equalsIgnoreCase(nick)) p.muteChat = mute;
+        }
         save();
     }
 

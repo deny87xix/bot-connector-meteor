@@ -25,9 +25,37 @@ public class BotManager {
 
     private final Map<String, Bot> bots = new ConcurrentHashMap<>();
 
+    /** Общий выключатель чата всех ботов (не сохраняется между запусками игры). */
+    private volatile boolean muteAll;
+
     private static String key(String nick) { return nick.toLowerCase(); }
 
     public static boolean validNick(String nick) { return NICK.matcher(nick).matches(); }
+
+    // ------------------------------------------------------------------ чат ботов
+
+    public boolean isMuteAll() { return muteAll; }
+
+    public void setMuteAll(boolean mute) {
+        this.muteAll = mute;
+    }
+
+    /** Скрыт ли чат этого бота (лично или общим выключателем). */
+    public boolean isMuted(Bot b) {
+        return muteAll || b.muteChat;
+    }
+
+    /** Включает/выключает показ чата бота вам. Возвращает false, если бота нет. */
+    public boolean setMute(String nick, boolean mute) {
+        Bot b = bots.get(key(nick));
+        if (b == null) return false;
+        b.muteChat = mute;
+        BotProfileStore.setMute(b.name, mute);
+        b.log.add(mute ? "чат бота отключён (сообщения вам не приходят, в лог пишутся)" : "чат бота включён");
+        return true;
+    }
+
+    // ------------------------------------------------------------------ профили
 
     /** Подгружает сохранённых ботов (bots.json) в реестр как остановленных. Вызывается один раз при старте. */
     public void restoreProfiles() {
@@ -35,6 +63,7 @@ public class BotManager {
             if (p == null || p.nickname == null || p.address == null) continue;
             if (!validNick(p.nickname) || bots.containsKey(key(p.nickname))) continue;
             Bot b = new Bot(p.nickname, p.address, SEQ.incrementAndGet());
+            b.muteChat = p.muteChat;
             b.set(Bot.State.DISCONNECTED, "сохранён (загружен из профиля)");
             bots.put(key(p.nickname), b);
         }
@@ -49,6 +78,7 @@ public class BotManager {
         if (existing != null && existing.isActive()) return "бот сейчас запущен: сначала остановите";
 
         Bot bot = new Bot(nick, address.trim(), SEQ.incrementAndGet(), existing != null ? existing.log : new BotLog());
+        bot.muteChat = existing != null && existing.muteChat;
         bot.set(Bot.State.DISCONNECTED, "сохранён");
         bots.put(key(nick), bot);
         BotProfileStore.put(nick, bot.address);
@@ -64,6 +94,7 @@ public class BotManager {
         if (existing != null && existing.isActive()) return "бот с таким ником уже подключается или онлайн";
 
         Bot bot = new Bot(nick, address.trim(), SEQ.incrementAndGet(), existing != null ? existing.log : new BotLog());
+        bot.muteChat = existing != null && existing.muteChat;
         bots.put(key(nick), bot);
         BotProfileStore.put(nick, bot.address);
         bot.log.add("запуск: " + bot.address);
@@ -175,6 +206,9 @@ public class BotManager {
      * слушатель соединения к классу ClientPlayNetworkHandler -> ClassCastException -> «invalid packet».
      * Поэтому пакеты ботов перехватываем первыми: отдаём их слушателю бота сами и отменяем событие,
      * чтобы остальные обработчики Meteor их не видели. Заодно пишем чат сервера в лог бота.
+     *
+     * Если чат бота отключён (лично или общим выключателем), сообщение сервера в логе остаётся,
+     * а слушателю бота не передаётся, то есть в ваш чат не попадает.
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     private void onPacketReceive(PacketEvent.Receive event) {
@@ -186,6 +220,7 @@ public class BotManager {
                 bot.log.add("чат: " + m.content().getString());
             } catch (Throwable ignored) {
             }
+            if (isMuted(bot)) return;
         }
         BotConnector.dispatch(event.connection, event.packet);
     }
