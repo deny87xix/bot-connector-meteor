@@ -21,6 +21,8 @@ public class Bot {
     public volatile ClientConnection connection;
     /** Физика и чанки тела бота (создаётся при входе в фазу play). */
     public volatile BotSim sim;
+    /** Если true, сообщения сервера, которые видит бот, не выводятся вам в чат (в лог бота попадают всегда). */
+    public volatile boolean muteChat;
     public final long attemptId;
 
     public Bot(String name, String address, long attemptId) {
