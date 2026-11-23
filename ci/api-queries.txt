@@ -1,0 +1,27 @@
+# Запросы к API для docs/api-notes.md (читает ci/api-dump.sh).
+# Форматы строк:
+#   FQCN                      сигнатуры всех членов класса
+#   FQCN :: regex             только члены, подходящие под egrep-regex
+#   calls:FQCN                последовательность вызовов внутри методов класса
+#   find:ПодстрокаИмени       где в jar лежит класс с такой подстрокой в имени
+
+net.minecraft.client.MinecraftClient :: world|player|interactionManager|cameraEntity|joinWorld|getNetworkHandler|setWorld|setScreen|disconnect|getCameraEntity|worldRenderer|particleManager|networkHandler|inGameHud|getSession|tick
+net.minecraft.client.gui.screen.multiplayer.ConnectScreen
+calls:net.minecraft.client.gui.screen.multiplayer.ConnectScreen
+calls:net.minecraft.client.gui.screen.multiplayer.ConnectScreen$1
+net.minecraft.client.network.ClientLoginNetworkHandler
+net.minecraft.client.network.ClientConfigurationNetworkHandler
+net.minecraft.client.network.ClientConnectionState
+net.minecraft.client.network.ClientPlayNetworkHandler :: <init>|onGameJoin|onPlayerRespawn|tick|getConnection|getWorld|clearWorld|sendPacket|connection|world|session
+net.minecraft.client.world.ClientWorld :: <init>|tick|disconnect|tickEntities|getEntityById
+net.minecraft.client.network.ClientPlayerEntity :: <init>|tick|input|networkHandler
+net.minecraft.client.network.ClientPlayerInteractionManager :: <init>|tick|networkHandler
+net.minecraft.network.ClientConnection :: connect|tick|send|disconnect|setPacketListener|transitionInbound|transitionOutbound|getPacketListener|handlePacket|isOpen|channel|<init>
+net.minecraft.network.NetworkThreadUtils
+net.minecraft.client.render.WorldRenderer :: setWorld|world
+net.minecraft.client.particle.ParticleManager :: setWorld|world
+find:KeyboardInput
+find:ClientConnectionState
+find:ConnectScreen
+find:IBaritoneProvider
+find:BaritoneAPI
