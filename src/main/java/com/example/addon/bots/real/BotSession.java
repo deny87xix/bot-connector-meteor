@@ -48,9 +48,10 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Бот с настоящей клиентской сессией: ванильные обработчики login/config/play, свой мир, игрок и менеджер
- * взаимодействия. Login и config обрабатываются на сетевом потоке (как в ванили), play-пакеты складываются в очередь
- * и применяются на главном потоке внутри окна контекста (BotContext).
+ * Сессия с настоящим клиентским состоянием: ванильные обработчики login/config/play, свой мир, игрок
+ * и менеджер взаимодействия. Такой же объект (host) описывает вашу собственную сессию, пока вы
+ * «внутри» бота (.rbot enter). Припаркованная сессия: play-пакеты кладутся в очередь и применяются в окне
+ * контекста (BotContext) на главном потоке; активная (entered) живёт как обычная сессия клиента.
  */
 public final class BotSession {
     private record Pending(Packet<?> packet, PacketListener listener) {}
@@ -61,24 +62,47 @@ public final class BotSession {
     public final BotLog log = new BotLog();
     public volatile Bot.State state = Bot.State.CONNECTING;
 
+    final boolean isHost;
     volatile ClientConnection connection;
-    // Состояние бота, подставляется BotContext
+    // Состояние сессии, подставляется BotContext
     ClientWorld world;
     ClientPlayerEntity player;
     ClientPlayerInteractionManager interactionManager;
 
     private final Queue<Pending> inbox = new ConcurrentLinkedQueue<>();
     private volatile boolean finished;
+    private volatile boolean entered;
     private ClientPlayerEntity inputFixedFor;
 
-    BotSession(String nick, String address) {
+    BotSession(String nick, String address, boolean isHost) {
         this.nick = nick;
         this.address = address;
+        this.isHost = isHost;
         this.uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + nick).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Ваша собственная текущая сессия, захваченная перед входом в бота (вызывать только на главном потоке). */
+    static BotSession host(MinecraftClient mc) {
+        BotSession h = new BotSession("(вы)", "", true);
+        h.connection = mc.getNetworkHandler().getConnection();
+        h.world = mc.world;
+        h.player = mc.player;
+        h.interactionManager = mc.interactionManager;
+        h.state = Bot.State.ONLINE;
+        h.fixInput(h.player);
+        return h;
     }
 
     public boolean isFinished() {
         return finished;
+    }
+
+    public boolean isEntered() {
+        return entered;
+    }
+
+    void setEntered(boolean v) {
+        entered = v;
     }
 
     void start() {
@@ -127,7 +151,7 @@ public final class BotSession {
         }
     }
 
-    /** Вызывается с сетевого потока вместо ванильной обработки пакета. */
+    /** Вызывается с сетевого потока вместо ванильной обработки пакета (только для припаркованных сессий). */
     void onPacket(Packet<?> p) {
         ClientConnection c = connection;
         if (c == null) return;
@@ -152,7 +176,7 @@ public final class BotSession {
         }
     }
 
-    /** Пакеты, которые иначе попали бы в ваш чат, HUD, звук и частицы. */
+    /** Пакеты, которые иначе попали бы в чат, HUD, звук и частицы той сессии, которую вы сейчас смотрите. */
     private boolean dropped(Packet<?> p) {
         if (p instanceof GameMessageS2CPacket m) {
             try {
@@ -168,8 +192,9 @@ public final class BotSession {
             || p instanceof ParticleS2CPacket;
     }
 
-    /** Главный поток, раз в тик. */
+    /** Главный поток, раз в тик (только для припаркованных сессий). */
     void tick() {
+        if (entered) return; // активную сессию тикает сам клиент
         ClientConnection c = connection;
         if (finished || c == null) return;
 
@@ -200,7 +225,13 @@ public final class BotSession {
         if (!c.isOpen()) closed(c);
     }
 
-    /** Управление игроком бота не должно идти с вашей клавиатуры. */
+    /** Дочитать оставшиеся play-пакеты, когда сессия снова стала активной (главный поток, без окна). */
+    void drainRemaining() {
+        Pending pd;
+        while ((pd = inbox.poll()) != null) apply(pd.packet(), pd.listener());
+    }
+
+    /** Управление игроком припаркованной сессии не должно идти с вашей клавиатуры. */
     private void fixInput(ClientPlayerEntity p) {
         if (p != null && p != inputFixedFor) {
             p.input = new Input();
@@ -208,9 +239,21 @@ public final class BotSession {
         }
     }
 
+    /** Сессия перестаёт быть активной: её игрок больше не читает вашу клавиатуру. */
+    void releaseInput() {
+        if (player != null) {
+            player.input = new Input();
+            inputFixedFor = player;
+        }
+    }
+
     private void closed(ClientConnection c) {
         if (finished) return;
         finished = true;
+        if (isHost) {
+            BotSessions.onHostClosed();
+            return;
+        }
         String reason = "";
         try {
             reason = c.getDisconnectionInfo() == null ? "" : c.getDisconnectionInfo().reason().getString();

@@ -9,10 +9,10 @@ import net.minecraft.command.CommandSource;
 
 import java.util.List;
 
-/** Экспериментально: боты с настоящей клиентской сессией (без перезахода). */
+/** Экспериментально: боты с настоящей клиентской сессией и вход в них без перезахода. */
 public class RBotCommand extends Command {
     public RBotCommand() {
-        super("rbot", "Экспериментально: боты с настоящей клиентской сессией (offline-mode серверы).");
+        super("rbot", "Экспериментально: боты с настоящей клиентской сессией (offline-mode серверы), вход без перезахода.");
     }
 
     @Override
@@ -29,6 +29,24 @@ public class RBotCommand extends Command {
                         return SINGLE_SUCCESS;
                     }))));
 
+        // .rbot enter <ник>: стать этим ботом (без перезахода)
+        builder.then(literal("enter")
+            .then(argument("nick", StringArgumentType.word())
+                .executes(ctx -> {
+                    String nick = StringArgumentType.getString(ctx, "nick");
+                    String err = BotSessions.enter(nick);
+                    if (err != null) error(err); else info("вы в боте (highlight)%s(default), вернуться: .rbot leave", nick);
+                    return SINGLE_SUCCESS;
+                })));
+
+        // .rbot leave: вернуться в свою сессию
+        builder.then(literal("leave")
+            .executes(ctx -> {
+                String err = BotSessions.leave();
+                if (err != null) error(err); else info("вы вернулись в свою сессию");
+                return SINGLE_SUCCESS;
+            }));
+
         // .rbot stop <ник>
         builder.then(literal("stop")
             .then(argument("nick", StringArgumentType.word())
@@ -43,7 +61,9 @@ public class RBotCommand extends Command {
             .executes(ctx -> {
                 List<BotSession> list = BotSessions.all();
                 if (list.isEmpty()) info("rbot-сессий нет");
-                for (BotSession s : list) info("(highlight)%s(default): %s, %s", s.nick, s.state, s.describe());
+                for (BotSession s : list) {
+                    info("(highlight)%s(default): %s, %s%s", s.nick, s.state, s.describe(), s.isEntered() ? " [вы в нём]" : "");
+                }
                 return SINGLE_SUCCESS;
             }));
     }
