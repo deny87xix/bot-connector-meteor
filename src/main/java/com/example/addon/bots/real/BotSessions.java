@@ -1,13 +1,14 @@
 package com.example.addon.bots.real;
 
 import com.example.addon.bots.Bot;
-import com.example.addon.bots.BotManager;
+import com.example.addon.bots.BotSwap;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.input.KeyboardInput;
+import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.network.ClientPlayerInteractionManager;
 import net.minecraft.client.world.ClientWorld;
@@ -15,62 +16,79 @@ import net.minecraft.text.Text;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Реестр ботов с настоящей клиентской сессией (экспериментально, команда .rbot).
+ * Движок настоящих сессий ботов: запуск, тик припаркованных сессий, перехват их пакетов, вход в бота и выход
+ * без перезахода. Реестр ботов (ники, профили, loop) ведёт BotManager, здесь только сетевая часть.
  *
  * Вход в бота (enter): ваша собственная сессия паркуется (host), в MinecraftClient подставляется мир,
  * игрок и менеджер бота, клавиатура переходит к боту. Meteor и Baritone видят бота как mc.player.
+ * Ваше соединение с сервером при этом живёт и тикается в своём окне контекста.
  */
 public final class BotSessions {
     public static final BotSessions INSTANCE = new BotSessions();
-    private static final Map<String, BotSession> SESSIONS = new ConcurrentHashMap<>();
+
+    /** Сессии, которые ещё не завершились (их пакеты мы перехватываем и тикаем сами). */
+    private static final Set<BotSession> LIVE = ConcurrentHashMap.newKeySet();
 
     private static volatile BotSession entered; // бот, в котором вы сейчас
     private static volatile BotSession host;    // ваша припаркованная сессия
 
     private BotSessions() {}
 
-    private static String key(String nick) {
-        return nick.toLowerCase();
+    static void register(BotSession s) {
+        LIVE.add(s);
+    }
+
+    static void unregister(BotSession s) {
+        LIVE.remove(s);
     }
 
     public static boolean isEntered() {
         return entered != null;
     }
 
-    /** Возвращает null при успехе, иначе текст ошибки. */
-    public static String start(String nick, String address) {
-        if (!BotManager.validNick(nick)) return "ник: 1-16 латинских букв, цифр или _";
-        if (address == null || address.isBlank()) return "пустой адрес сервера";
-        Bot headless = BotManager.INSTANCE.get(nick);
-        if (headless != null && headless.isActive()) return "бот с таким ником уже запущен через .bot";
-        BotSession s = new BotSession(nick, address.trim(), false);
-        if (SESSIONS.putIfAbsent(key(nick), s) != null) return "сессия с таким ником уже есть";
+    public static boolean isEntered(BotSession s) {
+        return s != null && entered == s;
+    }
+
+    /** Запускает настоящую сессию бота: соединение устанавливается в фоне. */
+    public static void start(Bot bot) {
+        BotSession s = new BotSession(bot, false);
+        bot.session = s;
         s.start();
+    }
+
+    /** Останавливает сессию бота; если вы в нём, сначала возвращает вас в вашу сессию. */
+    public static void stop(Bot bot) {
+        BotSession s = bot.session;
+        if (s == null) return;
+        if (entered == s) BotSwap.forceBack();
+        s.stop();
+    }
+
+    /**
+     * Сообщение или команда (с «/») от имени бота. Возвращает null при успехе, иначе текст ошибки.
+     * Только главный поток.
+     */
+    public static String chat(Bot bot, String text) {
+        BotSession s = bot.session;
+        if (s == null || s.isFinished() || s.player == null || s.connection == null) return "бот ещё не зашёл или отключён";
+        if (text == null || text.isBlank() || text.length() > 256) return "пустой текст или длиннее 256 символов";
+        if (!(s.connection.getPacketListener() instanceof ClientPlayNetworkHandler handler)) return "бот ещё не зашёл или отключён";
+        Runnable send = () -> {
+            if (text.startsWith("/")) handler.sendChatCommand(text.substring(1));
+            else handler.sendChatMessage(text);
+        };
+        if (s.isEntered()) send.run();
+        else BotContext.run(s, send);
         return null;
     }
 
-    public static boolean stop(String nick) {
-        BotSession s = SESSIONS.get(key(nick));
-        if (s == null) return false;
-        if (entered == s) leaveInternal();
-        s.stop();
-        return true;
-    }
-
-    public static List<BotSession> all() {
-        return new ArrayList<>(SESSIONS.values());
-    }
-
-    static void remove(BotSession s) {
-        SESSIONS.remove(key(s.nick), s);
-    }
-
     private static List<BotSession> candidates() {
-        List<BotSession> l = new ArrayList<>(SESSIONS.values());
+        List<BotSession> l = new ArrayList<>(LIVE);
         BotSession h = host;
         if (h != null) l.add(h);
         return l;
@@ -88,12 +106,10 @@ public final class BotSessions {
     }
 
     /** Возвращает null при успехе, иначе текст ошибки. */
-    public static String enter(String nick) {
+    public static String enter(BotSession bot) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (entered != null) return "вы уже в боте " + entered.nick + " (.rbot leave)";
-        BotSession bot = SESSIONS.get(key(nick));
-        if (bot == null) return "нет такой сессии: " + nick;
-        if (bot.isFinished() || bot.player == null || bot.world == null) return "бот ещё не в игре, смотрите .rbot list";
+        if (entered != null) return "вы уже в боте " + entered.nick + " (.bot back)";
+        if (bot.isFinished() || bot.player == null || bot.world == null) return "бот ещё не в игре, смотрите .bot list";
         if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return "сначала зайдите на сервер или в мир";
 
         host = BotSession.host(mc);
@@ -112,7 +128,7 @@ public final class BotSessions {
         return null;
     }
 
-    static void leaveInternal() {
+    private static void leaveInternal() {
         MinecraftClient mc = MinecraftClient.getInstance();
         BotSession bot = entered;
         BotSession h = host;
@@ -136,16 +152,16 @@ public final class BotSessions {
         h.drainRemaining();
     }
 
-    /** Ванильный disconnect пришёл, пока вы в боте: сначала возвращаемся в свою сессию. */
+    /** Ванильный disconnect пришёл, пока вы в боте (кик бота, обрыв): возвращаемся в свою сессию. */
     public static void leaveFromDisconnect() {
-        if (entered != null) leaveInternal();
+        if (entered != null) BotSwap.forceBack();
     }
 
     /** Ваша припаркованная сессия потеряла соединение (кик, обрыв). */
     static void onHostClosed() {
         if (entered == null) return;
         MinecraftClient mc = MinecraftClient.getInstance();
-        leaveInternal();
+        BotSwap.forceBack();
         mc.disconnect(Text.literal("Соединение с сервером закрыто"));
     }
 

@@ -1,10 +1,9 @@
 package com.example.addon.bots;
 
-import com.example.addon.bots.sim.BotSim;
-import net.minecraft.network.ClientConnection;
+import com.example.addon.bots.real.BotSession;
 
-import java.util.UUID;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /** Состояние одного бота. */
 public class Bot {
@@ -18,14 +17,13 @@ public class Bot {
 
     public volatile State state = State.CONNECTING;
     public volatile String status = "";
-    public volatile ClientConnection connection;
-    /** Физика и чанки тела бота (создаётся при входе в фазу play). */
-    public volatile BotSim sim;
+    /** Настоящая клиентская сессия бота (соединение, мир, игрок). null, пока бот не запускался. */
+    public volatile BotSession session;
     /** Если true, сообщения сервера, которые видит бот, не выводятся вам в чат (в лог бота попадают всегда). */
     public volatile boolean muteChat;
     /** Автоперезаход: после кика/ошибки бот сразу заходит снова, пока loop не выключен. */
     public volatile boolean loop;
-    /** Бота остановил пользователь (Stop, вход в бота и т. п.): loop его не переподключает, пока его не запустят снова. */
+    /** Бота остановил пользователь (Stop и т. п.): loop его не переподключает, пока его не запустят снова. */
     public volatile boolean userStopped;
     /** Когда бот последний раз перешёл в DISCONNECTED/ERROR (мс). */
     public volatile long endedAt;
