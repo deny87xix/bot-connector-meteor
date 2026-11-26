@@ -4,7 +4,6 @@ import com.example.addon.bots.BotManager;
 import com.example.addon.bots.real.BotSessions;
 import com.example.addon.bots.store.BotProfileStore;
 import com.example.addon.commands.BotCommand;
-import com.example.addon.commands.RBotCommand;
 import com.example.addon.gui.BotsTab;
 import com.mojang.logging.LogUtils;
 import meteordevelopment.meteorclient.MeteorClient;
@@ -32,7 +31,6 @@ public class AddonTemplate extends MeteorAddon {
         MeteorClient.EVENT_BUS.subscribe(BotManager.INSTANCE);
         MeteorClient.EVENT_BUS.subscribe(BotSessions.INSTANCE);
         Commands.add(new BotCommand());
-        Commands.add(new RBotCommand());
         Tabs.add(BotsTab.INSTANCE);
     }
 

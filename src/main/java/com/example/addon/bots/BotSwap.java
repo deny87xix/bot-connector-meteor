@@ -1,36 +1,24 @@
 package com.example.addon.bots;
 
 import com.example.addon.AddonTemplate;
+import com.example.addon.bots.real.BotSession;
+import com.example.addon.bots.real.BotSessions;
 import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.gui.tabs.Tabs;
-import meteordevelopment.meteorclient.systems.accounts.Account;
-import meteordevelopment.meteorclient.systems.accounts.types.CrackedAccount;
 import meteordevelopment.meteorclient.utils.Utils;
-import meteordevelopment.meteorclient.utils.network.MeteorExecutor;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
-import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
-import net.minecraft.client.network.ServerAddress;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.session.Session;
-import net.minecraft.client.world.ClientWorld;
 import net.minecraft.text.Text;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Вход в бота и возврат обратно.
+ * Вход в бота и возврат обратно БЕЗ перезахода.
  *
- * Настоящий клиент Minecraft не умеет держать два мира сразу, а Meteor и Baritone работают только с одним
- * клиентским игроком. Поэтому «вход» сделан как обмен телами:
- *  - .bot X meteor : headless-бот X отключается, ваш клиент перезаходит на сервер под ником X
- *                    (полноценная ванильная физика, Meteor, Baritone, инвентарь), открывается GUI Meteor,
- *                    а ваш прежний ник остаётся на сервере как headless-бот и стоит на месте;
- *  - .bot back     : ваш прежний ник снова становится клиентом, а X опять превращается в headless-бота.
+ * Каждый бот — настоящая клиентская сессия (см. {@link BotSession}): своё соединение, мир и игрок.
+ * «Вход» подменяет в MinecraftClient мир/игрока/менеджер бота, ваша сессия паркуется и продолжает
+ * жить на сервере (ваш персонаж не исчезает). Meteor и Baritone видят бота как mc.player.
  * Включённые модули Meteor запоминаются отдельно для каждого бота (см. {@link BotModules}).
- * Работает на offline-mode серверах (там ник однозначно задаёт игрока и его сохранённое состояние).
  */
 public final class BotSwap {
     private BotSwap() {}
@@ -43,18 +31,8 @@ public final class BotSwap {
 
     private static final List<Task> TASKS = new ArrayList<>();
 
-    private static Session originSession;
-    private static String originName;
-    private static String originAddress;
     private static String botNick;
-    private static String botAddress;
-    private static boolean busy;
-
-    // Действие «когда НОВЫЙ мир загрузился» (модули нельзя включать, пока нет игрока).
-    private static Runnable onReady;
-    private static ClientWorld worldAtSwitch;
-    private static int readyStable;
-    private static int readyTimeout;
+    private static String originName;
 
     private static MinecraftClient mc() { return MinecraftClient.getInstance(); }
 
@@ -68,53 +46,22 @@ public final class BotSwap {
 
     /** Вызывается каждый клиентский тик из BotManager. */
     public static void tick() {
-        if (!TASKS.isEmpty()) {
-            List<Task> due = new ArrayList<>();
-            for (Task t : TASKS) {
-                if (--t.left <= 0) due.add(t);
-            }
-            TASKS.removeAll(due);
-            for (Task t : due) {
-                try {
-                    t.run.run();
-                } catch (Throwable e) {
-                    AddonTemplate.LOG.warn("[BotSwap] task failed", e);
-                }
-            }
+        if (TASKS.isEmpty()) return;
+        List<Task> due = new ArrayList<>();
+        for (Task t : TASKS) {
+            if (--t.left <= 0) due.add(t);
         }
-
-        if (onReady != null) {
-            MinecraftClient c = mc();
-            if (--readyTimeout <= 0) {
-                onReady = null;
-                say("мир так и не загрузился вовремя: модули/GUI не применены");
-            } else if (c.world != null && c.world != worldAtSwitch && c.player != null
-                && c.getNetworkHandler() != null && c.currentScreen == null) {
-                // Ждём ~1 секунду стабильного состояния после закрытия экрана загрузки.
-                if (++readyStable >= 20) {
-                    Runnable r = onReady;
-                    onReady = null;
-                    try {
-                        r.run();
-                    } catch (Throwable e) {
-                        AddonTemplate.LOG.warn("[BotSwap] ready action failed", e);
-                    }
-                }
-            } else {
-                readyStable = 0;
+        TASKS.removeAll(due);
+        for (Task t : due) {
+            try {
+                t.run.run();
+            } catch (Throwable e) {
+                AddonTemplate.LOG.warn("[BotSwap] task failed", e);
             }
         }
     }
 
     private static void after(int ticks, Runnable r) { TASKS.add(new Task(ticks, r)); }
-
-    /** Выполнить r, когда клиент зайдёт в новый мир (отличный от текущего). */
-    private static void armReady(Runnable r) {
-        worldAtSwitch = mc().world;
-        onReady = r;
-        readyStable = 0;
-        readyTimeout = 20 * 90;
-    }
 
     private static void say(String msg) {
         AddonTemplate.LOG.info("[BotSwap] {}", msg);
@@ -131,7 +78,6 @@ public final class BotSwap {
      * Возвращает null при успехе, иначе текст ошибки.
      */
     public static String meteor(String nick) {
-        if (busy) return "идёт переключение, подождите пару секунд";
         if (isInside(nick)) {
             // Команда выполняется из чата, а чат закрывается уже после неё и сбил бы GUI: открываем чуть позже.
             after(3, BotSwap::openGui);
@@ -143,7 +89,7 @@ public final class BotSwap {
     /** .bot &lt;ник&gt; baritone &lt;команда&gt; — выполнить команду Baritone за бота, в которого вы вошли. */
     public static String baritone(String nick, String command) {
         if (!isInside(nick)) {
-            return "Baritone работает только за бота, в которого вы вошли: сначала .bot " + nick + " meteor";
+            return "Baritone работает только за бота, в которого вы вошли: сначала .bot enter " + nick;
         }
         return runBaritone(command);
     }
@@ -186,147 +132,73 @@ public final class BotSwap {
 
     /** Возвращает null при успехе, иначе текст ошибки. */
     public static String enter(String nick, boolean openGui) {
-        if (busy) return "идёт переключение, подождите пару секунд";
         if (botNick != null) return "вы уже внутри бота " + botNick + ": сначала .bot back";
 
         Bot bot = BotManager.INSTANCE.get(nick);
         if (bot == null) return "бот не найден: " + nick;
+        BotSession session = bot.session;
+        if (session == null || !bot.isActive()) return "бот не запущен: сначала .bot start " + bot.name;
 
-        Session cur = mc().getSession();
-        String me = cur.getUsername();
+        String me = mc().getSession().getUsername();
         if (me.equalsIgnoreCase(bot.name)) return "это ваш текущий ник";
 
-        ServerInfo here = mc().getCurrentServerEntry();
-        originSession = cur;
-        originName = me;
-        originAddress = here != null ? here.address : null;
-        botNick = bot.name;
-        botAddress = bot.address;
-        busy = true;
-
-        final String name = bot.name;
-        final String addr = bot.address;
-        final boolean keepBody = originAddress != null
-            && originAddress.equalsIgnoreCase(addr)
-            && BotManager.validNick(me);
-        final String body = me;
-
-        // Запоминаем ваши модули и, когда мир бота загрузится, включаем набор бота (+ открываем GUI).
+        // Запоминаем ваши модули, потом подменяем сессию и включаем набор бота.
         BotModules.rememberOrigin();
-        armReady(() -> {
-            int n = BotModules.applyForBot(name);
-            say("вы в боте " + name + " (модулей включено: " + n + "). Baritone: .bot " + name + " baritone <команда> или #команда в чате");
-            if (openGui) after(2, BotSwap::openGui);
-        });
-
-        // 1) освобождаем ник бота
-        BotManager.INSTANCE.suspend(name);
-
-        // 2) меняем сессию и заходим этим ником настоящим клиентом
-        after(10, () -> MeteorExecutor.execute(() -> {
-            try {
-                new CrackedAccount(name).login();
-                mc().execute(() -> connectReal(addr, name));
-            } catch (Throwable t) {
-                AddonTemplate.LOG.warn("[BotSwap] enter failed", t);
-                mc().execute(() -> rollbackEnter(name, addr));
-            }
-        }));
-
-        // 3) прежний ник остаётся на сервере телом-ботом
-        if (keepBody) {
-            after(70, () -> {
-                String err = BotManager.INSTANCE.connect(body, addr);
-                if (err != null) say("не удалось оставить тело " + body + ": " + err);
-                busy = false;
-            });
-        } else {
-            after(70, () -> busy = false);
+        String err = BotSessions.enter(session);
+        if (err != null) {
+            BotModules.forgetOrigin();
+            return err;
         }
-        say("вхожу в бота " + name + " ...");
-        return null;
-    }
 
-    private static void rollbackEnter(String name, String addr) {
-        Session s = originSession;
-        botNick = null;
-        busy = false;
-        TASKS.clear();
-        onReady = null;
-        BotModules.forgetOrigin();
-        if (s != null) MeteorExecutor.execute(() -> Account.setSession(s));
-        BotManager.INSTANCE.connect(name, addr);
-        say("не удалось войти в бота " + name);
+        botNick = bot.name;
+        originName = me;
+        int n = 0;
+        try {
+            n = BotModules.applyForBot(bot.name);
+        } catch (Throwable t) {
+            AddonTemplate.LOG.warn("[BotSwap] apply modules failed", t);
+        }
+        say("вы в боте " + bot.name + " (модулей включено: " + n + "). Вернуться: .bot back. Baritone: .bot " + bot.name + " baritone <команда> или #команда в чате");
+        if (openGui) after(3, BotSwap::openGui);
+        return null;
     }
 
     // ---------------------------------------------------------------- back
 
     /** Возвращает null при успехе, иначе текст ошибки. */
     public static String back() {
-        if (busy) return "идёт переключение, подождите пару секунд";
         if (botNick == null) return "вы не внутри бота";
-
-        busy = true;
-        final String nick = botNick;
-        final String addr = botAddress;
-        final String name = originName;
-        final Session session = originSession;
-        final String backAddr = originAddress;
-
-        // Пока мы ещё внутри бота: сохранить его набор модулей.
-        try {
-            BotModules.saveBot(nick);
-        } catch (Throwable t) {
-            AddonTemplate.LOG.warn("[BotSwap] save modules failed", t);
-        }
-
-        // Когда вернёмся в свой мир — восстановить ваши модули.
-        if (backAddr != null) {
-            armReady(() -> {
-                BotModules.restoreOrigin();
-                say("вы снова " + name + ", ваши модули восстановлены");
-            });
-        } else {
-            BotModules.forgetOrigin();
-        }
-
-        // 1) убираем тело прежнего ника (headless), если оно есть
-        BotManager.INSTANCE.remove(name);
-
-        // 2) возвращаем свою сессию и заходим обратно
-        after(20, () -> MeteorExecutor.execute(() -> {
-            try {
-                if (session != null) Account.setSession(session);
-                mc().execute(() -> {
-                    if (backAddr != null) {
-                        connectReal(backAddr, name);
-                    } else {
-                        mc().disconnect(Text.literal("back"));
-                    }
-                });
-            } catch (Throwable t) {
-                AddonTemplate.LOG.warn("[BotSwap] back failed", t);
-            }
-        }));
-
-        // 3) бот снова headless
-        after(100, () -> {
-            String err = BotManager.INSTANCE.connect(nick, addr);
-            if (err != null) say("не удалось вернуть бота " + nick + ": " + err);
-            botNick = null;
-            originSession = null;
-            busy = false;
-        });
-        say("возвращаюсь в " + name + " ...");
+        leaveAndRestore();
         return null;
     }
 
-    // ---------------------------------------------------------------- helpers
+    /** Вернуться, если вы в боте: кик бота, остановка бота, обрыв вашего соединения. */
+    public static void forceBack() {
+        if (!BotSessions.isEntered()) {
+            botNick = null;
+            return;
+        }
+        leaveAndRestore();
+    }
 
-    private static void connectReal(String address, String label) {
-        MinecraftClient c = mc();
-        ServerAddress sa = ServerAddress.parse(address);
-        ServerInfo info = new ServerInfo(label, address, ServerInfo.ServerType.OTHER);
-        ConnectScreen.connect(new MultiplayerScreen(new TitleScreen()), c, sa, info, false, null);
+    private static void leaveAndRestore() {
+        String nick = botNick;
+        // Пока мы ещё внутри бота: сохранить его набор модулей.
+        if (nick != null) {
+            try {
+                BotModules.saveBot(nick);
+            } catch (Throwable t) {
+                AddonTemplate.LOG.warn("[BotSwap] save modules failed", t);
+            }
+        }
+        BotSessions.leave();
+        botNick = null;
+        // Теперь вы снова в своём мире: вернуть ваши модули.
+        try {
+            BotModules.restoreOrigin();
+        } catch (Throwable t) {
+            AddonTemplate.LOG.warn("[BotSwap] restore modules failed", t);
+        }
+        say("вы снова в своёй сессии, ваши модули восстановлены");
     }
 }

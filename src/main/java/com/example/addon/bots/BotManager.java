@@ -1,14 +1,10 @@
 package com.example.addon.bots;
 
 import com.example.addon.AddonTemplate;
-import com.example.addon.bots.net.BotConnector;
+import com.example.addon.bots.real.BotSessions;
 import com.example.addon.bots.store.BotProfileStore;
-import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.orbit.EventHandler;
-import meteordevelopment.orbit.EventPriority;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
-/** Реестр ботов, жизненный цикл, тик соединений, чат ботов, автоперезаход (loop). */
+/** Реестр ботов, жизненный цикл, автоперезаход (loop). Сетевая часть — в {@link BotSessions}. */
 public class BotManager {
     public static final BotManager INSTANCE = new BotManager();
     private static final Pattern NICK = Pattern.compile("[A-Za-z0-9_]{1,16}");
@@ -119,7 +115,7 @@ public class BotManager {
         return null;
     }
 
-    /** Возвращает null при успехе, иначе текст ошибки. */
+    /** Запускает настоящую сессию бота. Возвращает null при успехе, иначе текст ошибки. */
     public String connect(String nick, String address) {
         if (!validNick(nick)) return "ник: 1-16 латинских букв, цифр или _";
         if (address == null || address.isBlank()) return "пустой адрес сервера";
@@ -134,9 +130,7 @@ public class BotManager {
         BotProfileStore.put(nick, bot.address);
         bot.log.add("запуск: " + bot.address);
 
-        Thread t = new Thread(() -> BotConnector.run(bot), "bot-connect-" + nick);
-        t.setDaemon(true);
-        t.start();
+        BotSessions.start(bot);
         return null;
     }
 
@@ -149,7 +143,10 @@ public class BotManager {
 
     /** Останавливает бота, профиль остаётся (loop не переподключает до следующего запуска). */
     public boolean stop(String nick) {
-        return suspend(nick);
+        Bot b = bots.get(key(nick));
+        if (b == null) return false;
+        close(b);
+        return true;
     }
 
     /** Запускает всех неактивных ботов (кроме того, в которого вы вошли). Возвращает количество запущенных. */
@@ -182,14 +179,6 @@ public class BotManager {
         return true;
     }
 
-    /** Отключает бота, но оставляет его в списке (и в сохранённых профилях) — для .bot enter. */
-    public boolean suspend(String nick) {
-        Bot b = bots.get(key(nick));
-        if (b == null) return false;
-        close(b);
-        return true;
-    }
-
     public void clear() {
         for (Bot b : new ArrayList<>(bots.values())) close(b);
         bots.clear();
@@ -200,37 +189,17 @@ public class BotManager {
 
     public List<Bot> all() { return new ArrayList<>(bots.values()); }
 
-    /** Ручное отключение: loop такого бота не переподключает. */
+    /** Ручное отключение: loop такого бота не переподключает. Если вы в этом боте, вас сначала возвращает в вашу сессию. */
     private void close(Bot b) {
         b.userStopped = true;
-        ClientConnection c = b.connection;
-        if (c != null && c.isOpen()) {
-            try { c.disconnect(net.minecraft.text.Text.literal("bot removed")); } catch (Throwable ignored) {}
-        }
+        BotSessions.stop(b);
         b.set(Bot.State.DISCONNECTED, "отключён");
     }
 
-    /** Тикаем соединения ботов: физика + flush + обработка закрытия, затем автоперезаход (loop). */
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         BotSwap.tick();
         BotService.tick();
-
-        for (Bot b : bots.values()) {
-            ClientConnection c = b.connection;
-            if (c == null) continue;
-            try {
-                if (c.isOpen()) {
-                    BotConnector.tick(b);
-                    c.tick();
-                } else {
-                    c.handleDisconnection();
-                }
-            } catch (Throwable t) {
-                AddonTemplate.LOG.warn("[Bot {}] tick error: {}", b.name, t.toString());
-            }
-        }
-
         loopTick();
     }
 
@@ -259,35 +228,5 @@ public class BotManager {
             String err = connect(b.name, b.address);
             if (err != null) b.log.add("loop: " + err);
         }
-    }
-
-    private Bot botOf(ClientConnection c) {
-        if (c == null) return null;
-        for (Bot b : bots.values()) if (b.connection == c) return b;
-        return null;
-    }
-
-    /**
-     * Meteor шлёт PacketEvent.Receive для ВСЕХ соединений, и его модули (например, ServerCommand) приводят
-     * слушатель соединения к классу ClientPlayNetworkHandler -> ClassCastException -> «invalid packet».
-     * Поэтому пакеты ботов перехватываем первыми: отдаём их слушателю бота сами и отменяем событие,
-     * чтобы остальные обработчики Meteor их не видели. Заодно пишем чат сервера в лог бота.
-     *
-     * Если чат бота отключён (лично или общим выключателем), сообщение сервера в логе остаётся,
-     * а слушателю бота не передаётся, то есть в ваш чат не попадает.
-     */
-    @EventHandler(priority = EventPriority.HIGHEST)
-    private void onPacketReceive(PacketEvent.Receive event) {
-        Bot bot = botOf(event.connection);
-        if (bot == null) return;
-        event.cancel();
-        if (event.packet instanceof GameMessageS2CPacket m) {
-            try {
-                bot.log.add("чат: " + m.content().getString());
-            } catch (Throwable ignored) {
-            }
-            if (isMuted(bot)) return;
-        }
-        BotConnector.dispatch(event.connection, event.packet);
     }
 }
