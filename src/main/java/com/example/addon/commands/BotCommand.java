@@ -86,6 +86,26 @@ public class BotCommand extends Command {
         return SINGLE_SUCCESS;
     }
 
+    /** .bot kick <ник>: отключить бота от сервера как при кике (без Stop: loop, если включён, вернёт бота). */
+    private int kick(String nick) {
+        Bot b = BotManager.INSTANCE.get(nick);
+        if (b == null) {
+            error("бот не найден: %s", nick);
+            return SINGLE_SUCCESS;
+        }
+        if (!b.isActive() || b.session == null) {
+            error("бот %s не запущен", nick);
+            return SINGLE_SUCCESS;
+        }
+        // Если вы внутри этого бота, сначала вернёмся в свою сессию.
+        if (BotSessions.isEntered(b.session)) BotSwap.forceBack();
+        b.log.add("kick: отключён вручную");
+        b.session.kick();
+        if (b.loop) info("бот %s отключён (kick), loop зайдёт снова", nick);
+        else info("бот %s отключён (kick); loop выключен, чтобы зайти снова: .bot start %s", nick, nick);
+        return SINGLE_SUCCESS;
+    }
+
     @Override
     public void build(LiteralArgumentBuilder<CommandSource> builder) {
         // .bot gui — открыть вкладку Bots
@@ -133,6 +153,11 @@ public class BotCommand extends Command {
                 else error("бот не найден: %s", nick);
                 return SINGLE_SUCCESS;
             })));
+
+        // .bot kick <ник> — отключить бота от сервера (как при кике), loop вернёт его
+        builder.then(literal("kick")
+            .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names).executes(ctx ->
+                kick(StringArgumentType.getString(ctx, "nick")))));
 
         builder.then(literal("remove")
             .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names).executes(ctx -> {
@@ -232,7 +257,7 @@ public class BotCommand extends Command {
         // .bot <ник> meteor — войти в бота и открыть Meteor от его имени (киллаура и любые модули работают за него).
         // .bot <ник> baritone <команда> — Baritone за бота (с подсказками по Tab). Если вы ещё не в боте, команда сама
         // входит в него (мгновенно, без перезахода) и выполняется.
-        // Служебные слова (connect, remove, loop, ...) выше имеют приоритет, поэтому ники с такими именами здесь недоступны.
+        // Служебные слова (connect, remove, loop, kick, ...) выше имеют приоритет, поэтому ники с такими именами здесь недоступны.
         builder.then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
             .then(literal("meteor").executes(ctx -> {
                 String nick = StringArgumentType.getString(ctx, "nick");

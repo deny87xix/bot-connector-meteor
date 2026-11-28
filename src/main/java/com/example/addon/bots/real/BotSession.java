@@ -25,6 +25,7 @@ import net.minecraft.network.OffThreadException;
 import net.minecraft.network.listener.PacketListener;
 import net.minecraft.network.packet.Packet;
 import net.minecraft.network.packet.c2s.login.LoginHelloC2SPacket;
+import net.minecraft.network.packet.c2s.play.ClientStatusC2SPacket;
 import net.minecraft.network.packet.s2c.play.ChatMessageS2CPacket;
 import net.minecraft.network.packet.s2c.play.ClearTitleS2CPacket;
 import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket;
@@ -58,6 +59,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public final class BotSession {
     private record Pending(Packet<?> packet, PacketListener listener) {}
 
+    /** Пауза между запросами респауна, пока бот мёртв (тики). */
+    private static final int RESPAWN_RETRY_TICKS = 20;
+
     public final Bot bot;
     public final String nick;
     public final String address;
@@ -75,6 +79,7 @@ public final class BotSession {
     private volatile boolean stopped;
     private volatile boolean entered;
     private ClientPlayerEntity inputFixedFor;
+    private int respawnCooldown;
 
     BotSession(Bot bot, boolean isHost) {
         this.bot = bot;
@@ -261,10 +266,27 @@ public final class BotSession {
                 w.tick(() -> true);
                 w.tickEntities();
             }
+            autoRespawn(mc.player, c);
         });
 
         if (player != null && bot.isActive() && bot.state != Bot.State.ONLINE) setState(Bot.State.ONLINE, describe());
         if (!c.isOpen()) closed(c);
+    }
+
+    /**
+     * У припаркованной сессии нет экрана смерти (setScreen в окне контекста заблокирован), поэтому запрос респауна
+     * шлём сами, как кнопка Respawn. Повторяем раз в секунду, пока игрок мёртв.
+     */
+    private void autoRespawn(ClientPlayerEntity p, ClientConnection c) {
+        if (p != null && (p.getHealth() <= 0.0f || p.isDead())) {
+            if (respawnCooldown-- <= 0) {
+                respawnCooldown = RESPAWN_RETRY_TICKS;
+                c.send(new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN));
+                if (!isHost) bot.log.add("смерть: запрос респауна");
+            }
+        } else {
+            respawnCooldown = 0;
+        }
     }
 
     /** Дочитать оставшиеся play-пакеты, когда сессия снова стала активной (главный поток, без окна). */
@@ -321,6 +343,22 @@ public final class BotSession {
             finished = true;
             setState(Bot.State.DISCONNECTED, "остановлен");
             BotSessions.unregister(this);
+        }
+    }
+
+    /**
+     * Отключить бота от сервера как при кике, но БЕЗ остановки: если loop включён, бот зайдёт снова.
+     * Главный поток.
+     */
+    public void kick() {
+        ClientConnection c = connection;
+        if (c != null && c.isOpen()) {
+            try {
+                c.disconnect(Text.literal("kicked"));
+            } catch (Throwable ignored) {
+            }
+        } else {
+            fail("kicked");
         }
     }
 
