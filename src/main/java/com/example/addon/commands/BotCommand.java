@@ -5,7 +5,7 @@ import com.example.addon.bots.BotBaritone;
 import com.example.addon.bots.BotManager;
 import com.example.addon.bots.BotService;
 import com.example.addon.bots.BotSwap;
-import com.example.addon.bots.net.BotConnector;
+import com.example.addon.bots.real.BotSessions;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
 
 public class BotCommand extends Command {
     public BotCommand() {
-        super("bot", "Боты: GUI, headless, вход в бота, Meteor и Baritone от его имени (offline-mode серверы).");
+        super("bot", "Боты: GUI, вход в бота без перезахода, Meteor и Baritone от его имени (offline-mode серверы).");
     }
 
     /** Подсказка ников ботов. */
@@ -177,7 +177,7 @@ public class BotCommand extends Command {
         builder.then(literal("list").executes(ctx -> {
             List<Bot> bots = BotManager.INSTANCE.all();
             if (BotSwap.isInside()) {
-                info("вы внутри бота %s (ваш прежний ник: %s). Вернуться: .bot back", BotSwap.insideNick(), BotSwap.originName());
+                info("вы внутри бота %s (ваш ник: %s). Вернуться: .bot back", BotSwap.insideNick(), BotSwap.originName());
             }
             if (bots.isEmpty()) { info("ботов нет"); return SINGLE_SUCCESS; }
             for (Bot b : bots) {
@@ -186,7 +186,7 @@ public class BotCommand extends Command {
                     info("%s @ %s [вы внутри]%s", b.name, b.address, flags);
                     continue;
                 }
-                String pos = (b.state == Bot.State.ONLINE && b.sim != null) ? " " + b.sim.describe() : "";
+                String pos = (b.state == Bot.State.ONLINE && b.session != null) ? " " + b.session.describe() : "";
                 info("%s @ %s [%s] %s%s%s", b.name, b.address, b.state, b.status, pos, flags);
             }
             return SINGLE_SUCCESS;
@@ -204,12 +204,16 @@ public class BotCommand extends Command {
                         return SINGLE_SUCCESS;
                     }
                     Bot b = BotManager.INSTANCE.get(nick);
-                    if (b == null) error("бот не найден: %s", nick);
-                    else if (!BotConnector.chat(b, text)) error("бот ещё не зашёл, отключён, или текст пустой/длиннее 256 символов");
+                    if (b == null) {
+                        error("бот не найден: %s", nick);
+                    } else {
+                        String cerr = BotSessions.chat(b, text);
+                        if (cerr != null) error(cerr);
+                    }
                     return SINGLE_SUCCESS;
                 }))));
 
-        // Войти в бота: ваш клиент перезаходит под его ником, а ваш прежний ник остаётся на сервере ботом.
+        // Войти в бота БЕЗ перезахода: ваш персонаж остаётся на сервере и ждёт вас, управление и камера переходят к боту.
         builder.then(literal("enter")
             .then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names).executes(ctx -> {
                 String nick = StringArgumentType.getString(ctx, "nick");
@@ -218,7 +222,7 @@ public class BotCommand extends Command {
                 return SINGLE_SUCCESS;
             })));
 
-        // Вернуться в свой аккаунт; бот снова становится headless.
+        // Вернуться в свою сессию; бот остаётся на сервере и ждёт вас.
         builder.then(literal("back").executes(ctx -> {
             String err = BotSwap.back();
             if (err != null) error(err);
@@ -227,7 +231,7 @@ public class BotCommand extends Command {
 
         // .bot <ник> meteor — войти в бота и открыть Meteor от его имени (киллаура и любые модули работают за него).
         // .bot <ник> baritone <команда> — Baritone за бота (с подсказками по Tab). Если вы ещё не в боте, команда сама
-        // входит в него и выполняется после загрузки мира.
+        // входит в него (мгновенно, без перезахода) и выполняется.
         // Служебные слова (connect, remove, loop, ...) выше имеют приоритет, поэтому ники с такими именами здесь недоступны.
         builder.then(argument("nick", StringArgumentType.word()).suggests(BotCommand::names)
             .then(literal("meteor").executes(ctx -> {
