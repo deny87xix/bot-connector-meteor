@@ -47,18 +47,19 @@ public class BotsScreen extends WindowTabScreen {
         "  Chat: on/off - показывать или скрывать вам чат этого бота (в логе бота сообщения остаются).",
         "  Loop: on/off - автоперезаход: после кика или ошибки бот снова заходит через ~0.5 с и так до выключения.",
         "    Stop останавливает бота и перезаход; следующий Start снова включает loop (если он on). На online-mode loop сам гаснет.",
-        "  Enter / Back - войти в бота или вернуться в свой аккаунт; Delete - удалить бота и его профиль.",
+        "  Enter / Back - войти в бота и вернуться в свою сессию БЕЗ перезахода (ваш персонаж остаётся на сервере); Delete - удалить бота и его профиль.",
         "  Вверху: Start all / Stop all - все боты сразу; Loop all ON / OFF - loop у всех ботов; «All bots chat» - общий выключатель чата.",
         "Добавление: ник + адрес. Save - сохранить без запуска; Save and start - сохранить и сразу подключить.",
         "  Боты хранятся в config/bots-addon/bots.json (вместе с Chat и Loop) и загружаются при старте игры как остановленные.",
+        "  Каждый бот - настоящая клиентская сессия (свой мир и игрок), поэтому в памяти он занимает больше, чем обычный лёгкий клиент.",
         "Baritone: Tab - подсказки (go -> goto), Enter или Send - отправить, Stop - команда stop.",
-        "  Если вы не внутри бота, команда сама войдёт в него (с перезаходом) и выполнится после загрузки мира.",
+        "  Если вы не внутри бота, команда сама войдёт в него (без перезахода) и сразу выполнится.",
         "Meteor: Open Meteor as bot - войти в бота и открыть Meteor от его имени (модули бота запоминаются отдельно).",
-        "  Return to my account - вернуться в свой аккаунт (то же, что .bot back).",
+        "  Return to my account - вернуться в свою сессию (то же, что .bot back).",
         "Logs: последние 30 строк выбранного бота (состояния, чат сервера, команды Baritone, попытки loop); Clear - очистить.",
         "Команды в чате: .bot gui, connect, save, start, stop, remove, clear, list, log <ник> [N], mute/unmute <ник|all>,",
         "  loop true|false (все), loop <ник> true|false, chat <ник> <текст>, enter <ник>, back, <ник> meteor, <ник> baritone <команда>.",
-        "Ограничения: только offline-mode серверы; вход в бота пока идёт с перезаходом клиента.",
+        "Ограничения: только offline-mode серверы.",
         "  Сообщения об ошибках в строке статуса пока могут быть на русском."
     };
 
@@ -219,7 +220,7 @@ public class BotsScreen extends WindowTabScreen {
     private void updatePositions() {
         for (Map.Entry<String, WLabel> e : posLabels.entrySet()) {
             Bot b = BotManager.INSTANCE.get(e.getKey());
-            String t = (b != null && b.state == Bot.State.ONLINE && b.sim != null) ? b.sim.describe() : "";
+            String t = (b != null && b.state == Bot.State.ONLINE && b.session != null) ? b.session.describe() : "";
             if (!t.equals(e.getValue().get())) e.getValue().set(t);
         }
     }
